@@ -300,19 +300,9 @@ GetInstByName(const char *Name,
 /// \brief Return all of the instructions defined by the target, ordered by
 /// their enum value.
 void CodeGenTarget::ComputeInstrsByEnum() const {
-  // The ordering here must match the ordering in TargetOpcodes.h.
-  // FIXME: It would be nice to have the opcode directly extracted
-  // to avoid potential errors. At the very, least a compile time
-  // error would be appreciated if the order does not match.
   static const char *const FixedInstrs[] = {
-      "PHI",          "INLINEASM",     "CFI_INSTRUCTION",  "EH_LABEL",
-      "GC_LABEL",     "KILL",          "EXTRACT_SUBREG",   "INSERT_SUBREG",
-      "IMPLICIT_DEF", "SUBREG_TO_REG", "COPY_TO_REGCLASS", "DBG_VALUE",
-      "REG_SEQUENCE", "COPY",          "BUNDLE",           "LIFETIME_START",
-      "LIFETIME_END", "STACKMAP",      "PATCHPOINT",       "LOAD_STACK_GUARD",
-      "STATEPOINT",   "LOCAL_ESCAPE",   "FAULTING_LOAD_OP",
-      // Generic opcodes for GlobalISel start here.
-      "G_ADD",
+#define HANDLE_TARGET_OPCODE(OPC, NUM) #OPC,
+#include "llvm/Target/TargetOpcodes.def"
       nullptr};
   const auto &Insts = getInstructions();
   for (const char *const *p = FixedInstrs; *p; ++p) {
@@ -362,9 +352,9 @@ void CodeGenTarget::reverseBitsForLittleEndianEncoding() {
     BitsInit *BI = R->getValueAsBitsInit("Inst");
 
     unsigned numBits = BI->getNumBits();
- 
+
     SmallVector<Init *, 16> NewBits(numBits);
- 
+
     for (unsigned bit = 0, end = numBits / 2; bit != end; ++bit) {
       unsigned bitSwapIdx = numBits - bit - 1;
       Init *OrigBit = BI->getBit(bit);
@@ -441,6 +431,7 @@ std::vector<CodeGenIntrinsic> llvm::LoadIntrinsics(const RecordKeeper &RC,
   std::vector<Record*> I = RC.getAllDerivedDefinitions("Intrinsic");
 
   std::vector<CodeGenIntrinsic> Result;
+  Result.reserve(I.size());
 
   for (unsigned i = 0, e = I.size(); i != e; ++i) {
     bool isTarget = I[i]->getValueAsBit("isTarget");
@@ -448,7 +439,7 @@ std::vector<CodeGenIntrinsic> llvm::LoadIntrinsics(const RecordKeeper &RC,
       Result.push_back(CodeGenIntrinsic(I[i]));
   }
   std::sort(Result.begin(), Result.end(),
-            [](CodeGenIntrinsic LHS, CodeGenIntrinsic RHS) {
+            [](const CodeGenIntrinsic& LHS, const CodeGenIntrinsic& RHS) {
               return LHS.Name < RHS.Name;
             });
   return Result;
@@ -574,7 +565,7 @@ CodeGenIntrinsic::CodeGenIntrinsic(Record *R) {
   }
 
   // Parse the intrinsic properties.
-  ListInit *PropList = R->getValueAsListInit("Properties");
+  ListInit *PropList = R->getValueAsListInit("IntrProperties");
   for (unsigned i = 0, e = PropList->size(); i != e; ++i) {
     Record *Property = PropList->getElementAsRecord(i);
     assert(Property->isSubClassOf("IntrinsicProperty") &&
@@ -582,12 +573,12 @@ CodeGenIntrinsic::CodeGenIntrinsic(Record *R) {
 
     if (Property->getName() == "IntrNoMem")
       ModRef = NoMem;
-    else if (Property->getName() == "IntrReadArgMem")
-      ModRef = ReadArgMem;
     else if (Property->getName() == "IntrReadMem")
-      ModRef = ReadMem;
-    else if (Property->getName() == "IntrReadWriteArgMem")
-      ModRef = ReadWriteArgMem;
+      ModRef = ModRefBehavior(ModRef & ~MR_Mod);
+    else if (Property->getName() == "IntrWriteMem")
+      ModRef = ModRefBehavior(ModRef & ~MR_Ref);
+    else if (Property->getName() == "IntrArgMemOnly")
+      ModRef = ModRefBehavior(ModRef & ~MR_Anywhere);
     else if (Property->getName() == "Commutative")
       isCommutative = true;
     else if (Property->getName() == "Throws")

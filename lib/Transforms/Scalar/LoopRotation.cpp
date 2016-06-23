@@ -34,6 +34,7 @@
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/Local.h"
+#include "llvm/Transforms/Utils/LoopUtils.h"
 #include "llvm/Transforms/Utils/SSAUpdater.h"
 #include "llvm/Transforms/Utils/ValueMapper.h"
 using namespace llvm;
@@ -69,7 +70,7 @@ static void RewriteUsesOfClonedInstructions(BasicBlock *OrigHeader,
     if (OrigHeaderVal->use_empty())
       continue;
 
-    Value *OrigPreHeaderVal = ValueMap[OrigHeaderVal];
+    Value *OrigPreHeaderVal = ValueMap.lookup(OrigHeaderVal);
 
     // The value now exits in two versions: the initial value in the preheader
     // and the loop "next" value in the original header.
@@ -165,6 +166,11 @@ static bool rotateLoop(Loop *L, unsigned MaxHeaderSize, LoopInfo *LI,
             << " instructions: "; L->dump());
       return false;
     }
+    if (Metrics.convergent) {
+      DEBUG(dbgs() << "LoopRotation: NOT rotating - contains convergent "
+                      "instructions: "; L->dump());
+      return false;
+    }
     if (Metrics.NumInsts > MaxHeaderSize)
       return false;
   }
@@ -238,7 +244,7 @@ static bool rotateLoop(Loop *L, unsigned MaxHeaderSize, LoopInfo *LI,
 
     // Eagerly remap the operands of the instruction.
     RemapInstruction(C, ValueMap,
-                     RF_NoModuleLevelChanges|RF_IgnoreMissingEntries);
+                     RF_NoModuleLevelChanges | RF_IgnoreMissingLocals);
 
     // With the operands remapped, see if the instruction constant folds or is
     // otherwise simplifyable.  This commonly occurs because the entry from PHI
@@ -573,24 +579,13 @@ public:
 
   // LCSSA form makes instruction renaming easier.
   void getAnalysisUsage(AnalysisUsage &AU) const override {
-    AU.addPreserved<AAResultsWrapperPass>();
     AU.addRequired<AssumptionCacheTracker>();
-    AU.addPreserved<DominatorTreeWrapperPass>();
-    AU.addRequired<LoopInfoWrapperPass>();
-    AU.addPreserved<LoopInfoWrapperPass>();
-    AU.addRequiredID(LoopSimplifyID);
-    AU.addPreservedID(LoopSimplifyID);
-    AU.addRequiredID(LCSSAID);
-    AU.addPreservedID(LCSSAID);
-    AU.addPreserved<ScalarEvolutionWrapperPass>();
-    AU.addPreserved<SCEVAAWrapperPass>();
     AU.addRequired<TargetTransformInfoWrapperPass>();
-    AU.addPreserved<BasicAAWrapperPass>();
-    AU.addPreserved<GlobalsAAWrapperPass>();
+    getLoopAnalysisUsage(AU);
   }
 
   bool runOnLoop(Loop *L, LPPassManager &LPM) override {
-    if (skipOptnoneFunction(L))
+    if (skipLoop(L))
       return false;
     Function &F = *L->getHeader()->getParent();
 
@@ -609,14 +604,9 @@ public:
 
 char LoopRotate::ID = 0;
 INITIALIZE_PASS_BEGIN(LoopRotate, "loop-rotate", "Rotate Loops", false, false)
-INITIALIZE_PASS_DEPENDENCY(TargetTransformInfoWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(AssumptionCacheTracker)
-INITIALIZE_PASS_DEPENDENCY(LoopInfoWrapperPass)
-INITIALIZE_PASS_DEPENDENCY(LoopSimplify)
-INITIALIZE_PASS_DEPENDENCY(LCSSA)
-INITIALIZE_PASS_DEPENDENCY(SCEVAAWrapperPass)
-INITIALIZE_PASS_DEPENDENCY(BasicAAWrapperPass)
-INITIALIZE_PASS_DEPENDENCY(GlobalsAAWrapperPass)
+INITIALIZE_PASS_DEPENDENCY(LoopPass)
+INITIALIZE_PASS_DEPENDENCY(TargetTransformInfoWrapperPass)
 INITIALIZE_PASS_END(LoopRotate, "loop-rotate", "Rotate Loops", false, false)
 
 Pass *llvm::createLoopRotatePass(int MaxHeaderSize) {

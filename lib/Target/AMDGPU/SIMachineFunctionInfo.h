@@ -11,9 +11,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-
-#ifndef LLVM_LIB_TARGET_R600_SIMACHINEFUNCTIONINFO_H
-#define LLVM_LIB_TARGET_R600_SIMACHINEFUNCTIONINFO_H
+#ifndef LLVM_LIB_TARGET_AMDGPU_SIMACHINEFUNCTIONINFO_H
+#define LLVM_LIB_TARGET_AMDGPU_SIMACHINEFUNCTIONINFO_H
 
 #include "AMDGPUMachineFunction.h"
 #include "SIRegisterInfo.h"
@@ -25,7 +24,7 @@ class MachineRegisterInfo;
 
 /// This class keeps track of the SPI_SP_INPUT_ADDR config register, which
 /// tells the hardware which interpolation parameters to load.
-class SIMachineFunctionInfo : public AMDGPUMachineFunction {
+class SIMachineFunctionInfo final : public AMDGPUMachineFunction {
   // FIXME: This should be removed and getPreloadedValue moved here.
   friend struct SIRegisterInfo;
   void anchor() override;
@@ -61,6 +60,11 @@ class SIMachineFunctionInfo : public AMDGPUMachineFunction {
   unsigned PSInputAddr;
   bool ReturnsVoid;
 
+  unsigned MaximumWorkGroupSize;
+
+  // Number of reserved VGPRs for trap handler usage.
+  unsigned DebuggerReserveTrapVGPRCount;
+
 public:
   // FIXME: Make private
   unsigned LDSWaveSpillSize;
@@ -73,6 +77,8 @@ public:
 private:
   bool HasSpilledSGPRs;
   bool HasSpilledVGPRs;
+  bool HasNonSpillStackObjects;
+  bool HasFlatInstructions;
 
   // Feature bits required for inputs passed in user SGPRs.
   bool PrivateSegmentBuffer : 1;
@@ -111,8 +117,9 @@ public:
     unsigned VGPR;
     int Lane;
     SpilledReg(unsigned R, int L) : VGPR (R), Lane (L) { }
-    SpilledReg() : VGPR(0), Lane(-1) { }
+    SpilledReg() : VGPR(AMDGPU::NoRegister), Lane(-1) { }
     bool hasLane() { return Lane != -1;}
+    bool hasReg() { return VGPR != AMDGPU::NoRegister;}
   };
 
   // SIMachineFunctionInfo definition
@@ -129,6 +136,7 @@ public:
   unsigned addDispatchPtr(const SIRegisterInfo &TRI);
   unsigned addQueuePtr(const SIRegisterInfo &TRI);
   unsigned addKernargSegmentPtr(const SIRegisterInfo &TRI);
+  unsigned addFlatScratchInit(const SIRegisterInfo &TRI);
 
   // Add system SGPRs.
   unsigned addWorkGroupIDX() {
@@ -159,6 +167,10 @@ public:
     PrivateSegmentWaveByteOffsetSystemSGPR = getNextSystemSGPR();
     NumSystemSGPRs += 1;
     return PrivateSegmentWaveByteOffsetSystemSGPR;
+  }
+
+  void setPrivateSegmentWaveByteOffset(unsigned Reg) {
+    PrivateSegmentWaveByteOffsetSystemSGPR = Reg;
   }
 
   bool hasPrivateSegmentBuffer() const {
@@ -261,6 +273,10 @@ public:
     ScratchWaveOffsetReg = Reg;
   }
 
+  unsigned getQueuePtrUserSGPR() const {
+    return QueuePtrUserSGPR;
+  }
+
   bool hasSpilledSGPRs() const {
     return HasSpilledSGPRs;
   }
@@ -275,6 +291,22 @@ public:
 
   void setHasSpilledVGPRs(bool Spill = true) {
     HasSpilledVGPRs = Spill;
+  }
+
+  bool hasNonSpillStackObjects() const {
+    return HasNonSpillStackObjects;
+  }
+
+  void setHasNonSpillStackObjects(bool StackObject = true) {
+    HasNonSpillStackObjects = StackObject;
+  }
+
+  bool hasFlatInstructions() const {
+    return HasFlatInstructions;
+  }
+
+  void setHasFlatInstructions(bool UseFlat = true) {
+    HasFlatInstructions = UseFlat;
   }
 
   unsigned getPSInputAddr() const {
@@ -297,10 +329,13 @@ public:
     ReturnsVoid = Value;
   }
 
+  unsigned getDebuggerReserveTrapVGPRCount() const {
+    return DebuggerReserveTrapVGPRCount;
+  }
+
   unsigned getMaximumWorkGroupSize(const MachineFunction &MF) const;
 };
 
 } // End namespace llvm
-
 
 #endif

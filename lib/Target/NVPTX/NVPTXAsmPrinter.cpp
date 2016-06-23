@@ -432,7 +432,8 @@ bool NVPTXAsmPrinter::isLoopHeaderOfNoUnroll(
       continue;
     }
     if (const BasicBlock *PBB = PMBB->getBasicBlock()) {
-      if (MDNode *LoopID = PBB->getTerminator()->getMetadata("llvm.loop")) {
+      if (MDNode *LoopID =
+              PBB->getTerminator()->getMetadata(LLVMContext::MD_loop)) {
         if (GetUnrollMetadata(LoopID, "llvm.loop.unroll.disable"))
           return true;
       }
@@ -798,8 +799,16 @@ void NVPTXAsmPrinter::recordAndEmitFilenames(Module &M) {
     if (filenameMap.find(Filename) != filenameMap.end())
       continue;
     filenameMap[Filename] = i;
+    OutStreamer->EmitDwarfFileDirective(i, "", Filename);
     ++i;
   }
+}
+
+static bool isEmptyXXStructor(GlobalVariable *GV) {
+  if (!GV) return true;
+  const ConstantArray *InitList = dyn_cast<ConstantArray>(GV->getInitializer());
+  if (!InitList) return true;  // Not an array; we don't know how to parse.
+  return InitList->getNumOperands() == 0;
 }
 
 bool NVPTXAsmPrinter::doInitialization(Module &M) {
@@ -815,6 +824,16 @@ bool NVPTXAsmPrinter::doInitialization(Module &M) {
   if (M.alias_size()) {
     report_fatal_error("Module has aliases, which NVPTX does not support.");
     return true; // error
+  }
+  if (!isEmptyXXStructor(M.getNamedGlobal("llvm.global_ctors"))) {
+    report_fatal_error(
+        "Module has a nontrivial global ctor, which NVPTX does not support.");
+    return true;  // error
+  }
+  if (!isEmptyXXStructor(M.getNamedGlobal("llvm.global_dtors"))) {
+    report_fatal_error(
+        "Module has a nontrivial global dtor, which NVPTX does not support.");
+    return true;  // error
   }
 
   SmallString<128> Str1;
@@ -1891,8 +1910,7 @@ void NVPTXAsmPrinter::bufferLEByte(const Constant *CPV, int Bytes,
   case Type::ArrayTyID:
   case Type::VectorTyID:
   case Type::StructTyID: {
-    if (isa<ConstantArray>(CPV) || isa<ConstantVector>(CPV) ||
-        isa<ConstantStruct>(CPV) || isa<ConstantDataSequential>(CPV)) {
+    if (isa<ConstantAggregate>(CPV) || isa<ConstantDataSequential>(CPV)) {
       int ElementSize = DL.getTypeAllocSize(CPV->getType());
       bufferAggregateConstant(CPV, aggBuffer);
       if (Bytes > ElementSize)

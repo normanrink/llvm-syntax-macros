@@ -50,7 +50,7 @@ define i32 @yes1(i32* %q) {
 ; rearranged to make the stack contiguous.
 
 ; CHECK-LABEL: stack_uses:
-; CHECK-NEXT: .param i32, i32, i32, i32{{$}}
+; CHECK: .param i32, i32, i32, i32{{$}}
 ; CHECK-NEXT: .result i32{{$}}
 ; CHECK-NEXT: block{{$}}
 ; CHECK-NEXT: i32.const   $push13=, 1{{$}}
@@ -66,7 +66,7 @@ define i32 @yes1(i32* %q) {
 ; CHECK-NEXT: i32.xor     $push7=, $pop5, $pop6{{$}}
 ; CHECK-NEXT: i32.const   $push10=, 1{{$}}
 ; CHECK-NEXT: i32.ne      $push8=, $pop7, $pop10{{$}}
-; CHECK-NEXT: br_if       $pop8, 0{{$}}
+; CHECK-NEXT: br_if       0, $pop8{{$}}
 ; CHECK-NEXT: i32.const   $push9=, 0{{$}}
 ; CHECK-NEXT: return      $pop9{{$}}
 ; CHECK-NEXT: .LBB4_2:
@@ -93,15 +93,15 @@ false:
 ; be trivially stackified. However, it can be stackified with a tee_local.
 
 ; CHECK-LABEL: multiple_uses:
-; CHECK-NEXT: .param       i32, i32, i32{{$}}
+; CHECK: .param       i32, i32, i32{{$}}
 ; CHECK-NEXT: .local       i32{{$}}
 ; CHECK-NEXT: block{{$}}
-; CHECK-NEXT: i32.load    $push0=, 0($2){{$}}
-; CHECK-NEXT: tee_local   $push3=, $3=, $pop0{{$}}
-; CHECK-NEXT: i32.ge_u    $push1=, $pop3, $1{{$}}
-; CHECK-NEXT: br_if       $pop1, 0{{$}}
-; CHECK-NEXT: i32.lt_u    $push2=, $3, $0{{$}}
-; CHECK-NEXT: br_if       $pop2, 0{{$}}
+; CHECK-NEXT: i32.load    $push[[NUM0:[0-9]+]]=, 0($2){{$}}
+; CHECK-NEXT: tee_local   $push[[NUM1:[0-9]+]]=, $3=, $pop[[NUM0]]{{$}}
+; CHECK-NEXT: i32.ge_u    $push[[NUM2:[0-9]+]]=, $pop[[NUM1]], $1{{$}}
+; CHECK-NEXT: br_if       0, $pop[[NUM2]]{{$}}
+; CHECK-NEXT: i32.lt_u    $push[[NUM3:[0-9]+]]=, $3, $0{{$}}
+; CHECK-NEXT: br_if       0, $pop[[NUM3]]{{$}}
 ; CHECK-NEXT: i32.store   $discard=, 0($2), $3{{$}}
 ; CHECK-NEXT: .LBB5_3:
 ; CHECK-NEXT: end_block{{$}}
@@ -151,7 +151,7 @@ entry:
 ; tree order.
 
 ; CHECK-LABEL: div_tree:
-; CHECK-NEXT: .param i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32{{$}}
+; CHECK: .param i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32{{$}}
 ; CHECK-NEXT: .result     i32{{$}}
 ; CHECK-NEXT: i32.div_s   $push0=, $0, $1
 ; CHECK-NEXT: i32.div_s   $push1=, $2, $3
@@ -192,10 +192,10 @@ entry:
 ; A simple multiple-use case.
 
 ; CHECK-LABEL: simple_multiple_use:
-; CHECK-NEXT:  .param      i32, i32{{$}}
-; CHECK-NEXT:  i32.mul     $push0=, $1, $0{{$}}
-; CHECK-NEXT:  tee_local   $push1=, $0=, $pop0{{$}}
-; CHECK-NEXT:  call        use_a@FUNCTION, $pop1{{$}}
+; CHECK:  .param      i32, i32{{$}}
+; CHECK-NEXT:  i32.mul     $push[[NUM0:[0-9]+]]=, $1, $0{{$}}
+; CHECK-NEXT:  tee_local   $push[[NUM1:[0-9]+]]=, $0=, $pop[[NUM0]]{{$}}
+; CHECK-NEXT:  call        use_a@FUNCTION, $pop[[NUM1]]{{$}}
 ; CHECK-NEXT:  call        use_b@FUNCTION, $0{{$}}
 ; CHECK-NEXT:  return{{$}}
 declare void @use_a(i32)
@@ -210,10 +210,10 @@ define void @simple_multiple_use(i32 %x, i32 %y) {
 ; Multiple uses of the same value in one instruction.
 
 ; CHECK-LABEL: multiple_uses_in_same_insn:
-; CHECK-NEXT:  .param      i32, i32{{$}}
-; CHECK-NEXT:  i32.mul     $push0=, $1, $0{{$}}
-; CHECK-NEXT:  tee_local   $push1=, $0=, $pop0{{$}}
-; CHECK-NEXT:  call        use_2@FUNCTION, $pop1, $0{{$}}
+; CHECK:  .param      i32, i32{{$}}
+; CHECK-NEXT:  i32.mul     $push[[NUM0:[0-9]+]]=, $1, $0{{$}}
+; CHECK-NEXT:  tee_local   $push[[NUM1:[0-9]+]]=, $0=, $pop[[NUM0]]{{$}}
+; CHECK-NEXT:  call        use_2@FUNCTION, $pop[[NUM1]], $0{{$}}
 ; CHECK-NEXT:  return{{$}}
 declare void @use_2(i32, i32)
 define void @multiple_uses_in_same_insn(i32 %x, i32 %y) {
@@ -225,7 +225,8 @@ define void @multiple_uses_in_same_insn(i32 %x, i32 %y) {
 ; Commute operands to achieve better stackifying.
 
 ; CHECK-LABEL: commute:
-; CHECK-NEXT:  .result     i32{{$}}
+; CHECK-NOT: param
+; CHECK:  .result     i32{{$}}
 ; CHECK-NEXT:  i32.call    $push0=, red@FUNCTION{{$}}
 ; CHECK-NEXT:  i32.call    $push1=, green@FUNCTION{{$}}
 ; CHECK-NEXT:  i32.add     $push2=, $pop0, $pop1{{$}}
@@ -265,4 +266,107 @@ define i32 @no_stackify_past_use(i32 %arg) {
   ret i32 %tmp6
 }
 
-!0 = !{}
+; Stackify individual defs of virtual registers with multiple defs.
+
+; CHECK-LABEL: multiple_defs:
+; CHECK:        f64.add         $push[[NUM0:[0-9]+]]=, ${{[0-9]+}}, $pop{{[0-9]+}}{{$}}
+; CHECK-NEXT:   tee_local       $push[[NUM1:[0-9]+]]=, $[[NUM2:[0-9]+]]=, $pop[[NUM0]]{{$}}
+; CHECK-NEXT:   f64.select      $push{{[0-9]+}}=, $pop{{[0-9]+}}, $pop[[NUM1]], ${{[0-9]+}}{{$}}
+; CHECK:        $[[NUM2]]=,
+; CHECK:        $[[NUM2]]=,
+define void @multiple_defs(i32 %arg, i32 %arg1, i1 %arg2, i1 %arg3, i1 %arg4) {
+bb:
+  br label %bb5
+
+bb5:                                              ; preds = %bb21, %bb
+  %tmp = phi double [ 0.000000e+00, %bb ], [ %tmp22, %bb21 ]
+  %tmp6 = phi double [ 0.000000e+00, %bb ], [ %tmp23, %bb21 ]
+  %tmp7 = fcmp olt double %tmp6, 2.323450e+01
+  br i1 %tmp7, label %bb8, label %bb21
+
+bb8:                                              ; preds = %bb17, %bb5
+  %tmp9 = phi double [ %tmp19, %bb17 ], [ %tmp, %bb5 ]
+  %tmp10 = fadd double %tmp6, -1.000000e+00
+  %tmp11 = select i1 %arg2, double -1.135357e+04, double %tmp10
+  %tmp12 = fadd double %tmp11, %tmp9
+  br i1 %arg3, label %bb17, label %bb13
+
+bb13:                                             ; preds = %bb8
+  %tmp14 = or i32 %arg1, 2
+  %tmp15 = icmp eq i32 %tmp14, 14
+  %tmp16 = select i1 %tmp15, double -1.135357e+04, double 0xBFCE147AE147B000
+  br label %bb17
+
+bb17:                                             ; preds = %bb13, %bb8
+  %tmp18 = phi double [ %tmp16, %bb13 ], [ %tmp10, %bb8 ]
+  %tmp19 = fadd double %tmp18, %tmp12
+  %tmp20 = fcmp olt double %tmp6, 2.323450e+01
+  br i1 %tmp20, label %bb8, label %bb21
+
+bb21:                                             ; preds = %bb17, %bb5
+  %tmp22 = phi double [ %tmp, %bb5 ], [ %tmp9, %bb17 ]
+  %tmp23 = fadd double %tmp6, 1.000000e+00
+  br label %bb5
+}
+
+; Don't move calls past loads
+; CHECK-LABEL: no_stackify_call_past_load:
+; CHECK: i32.call $0=, red
+; CHECK: i32.const $push0=, 0
+; CHECK: i32.load $1=, count($pop0)
+@count = hidden global i32 0, align 4
+define i32 @no_stackify_call_past_load() {
+  %a = call i32 @red()
+  %b = load i32, i32* @count, align 4
+  call i32 @callee(i32 %a)
+  ret i32 %b
+  ; use of a
+}
+
+; Don't move stores past loads if there may be aliasing
+; CHECK-LABEL: no_stackify_store_past_load
+; CHECK: i32.store {{.*}}, 0($1), $0
+; CHECK: i32.load {{.*}}, 0($2)
+; CHECK: i32.call {{.*}}, callee@FUNCTION, $0
+define i32 @no_stackify_store_past_load(i32 %a, i32* %p1, i32* %p2) {
+  store i32 %a, i32* %p1
+  %b = load i32, i32* %p2, align 4
+  call i32 @callee(i32 %a)
+  ret i32 %b
+}
+
+; Can still stackify past invariant loads.
+; CHECK-LABEL: store_past_invar_load
+; CHECK: i32.store $push{{.*}}, 0($1), $0
+; CHECK: i32.call {{.*}}, callee@FUNCTION, $pop
+; CHECK: i32.load $push{{.*}}, 0($2)
+; CHECK: return $pop
+define i32 @store_past_invar_load(i32 %a, i32* %p1, i32* dereferenceable(4) %p2) {
+  store i32 %a, i32* %p1
+  %b = load i32, i32* %p2, !invariant.load !0
+  call i32 @callee(i32 %a)
+  ret i32 %b
+}
+
+; CHECK-LABEL: ignore_dbg_value:
+; CHECK-NEXT: .Lfunc_begin
+; CHECK-NEXT: unreachable
+declare void @llvm.dbg.value(metadata, i64, metadata, metadata)
+define void @ignore_dbg_value() {
+  call void @llvm.dbg.value(metadata i32 0, i64 0, metadata !7, metadata !9), !dbg !10
+  unreachable
+}
+
+!llvm.module.flags = !{!0}
+!llvm.dbg.cu = !{!1}
+
+!0 = !{i32 2, !"Debug Info Version", i32 3}
+!1 = distinct !DICompileUnit(language: DW_LANG_C99, file: !2, producer: "clang version 3.9.0 (trunk 266005) (llvm/trunk 266105)", isOptimized: false, runtimeVersion: 0, emissionKind: FullDebug, enums: !3)
+!2 = !DIFile(filename: "test.c", directory: "/")
+!3 = !{}
+!5 = distinct !DISubprogram(name: "test", scope: !2, file: !2, line: 10, type: !6, isLocal: false, isDefinition: true, scopeLine: 11, flags: DIFlagPrototyped, isOptimized: true, unit: !1, variables: !3)
+!6 = !DISubroutineType(types: !3)
+!7 = !DILocalVariable(name: "nzcnt", scope: !5, file: !2, line: 15, type: !8)
+!8 = !DIBasicType(name: "int", size: 32, align: 32, encoding: DW_ATE_signed)
+!9 = !DIExpression()
+!10 = !DILocation(line: 15, column: 6, scope: !5)

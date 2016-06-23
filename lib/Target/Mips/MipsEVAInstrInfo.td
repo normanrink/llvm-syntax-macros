@@ -148,8 +148,8 @@ class CACHEE_DESC_BASE<string instr_asm, Operand MemOpnd> {
   string DecoderMethod = "DecodeCacheeOp_CacheOpR6";
 }
 
-class CACHEE_DESC  : CACHEE_DESC_BASE<"cachee", mem>;
-class PREFE_DESC   : CACHEE_DESC_BASE<"prefe", mem>;
+class CACHEE_DESC  : CACHEE_DESC_BASE<"cachee", mem_simm9>;
+class PREFE_DESC   : CACHEE_DESC_BASE<"prefe", mem_simm9>;
 
 //===----------------------------------------------------------------------===//
 //
@@ -185,8 +185,10 @@ def LLE     : LLE_ENC, LLE_DESC, INSN_EVA;
 def SCE     : SCE_ENC, SCE_DESC, INSN_EVA;
 }
 
-def TLBINV  : TLBINV_ENC, TLBINV_DESC, INSN_EVA;
-def TLBINVF : TLBINVF_ENC, TLBINVF_DESC, INSN_EVA;
+let AdditionalPredicates = [NotInMicroMips] in {
+  def TLBINV  : TLBINV_ENC, TLBINV_DESC, INSN_EVA;
+  def TLBINVF : TLBINVF_ENC, TLBINVF_DESC, INSN_EVA;
+}
 
 def CACHEE  : CACHEE_ENC, CACHEE_DESC, INSN_EVA;
 def PREFE   : PREFE_ENC, PREFE_DESC, INSN_EVA;

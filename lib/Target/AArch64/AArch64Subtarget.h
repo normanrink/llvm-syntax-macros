@@ -19,6 +19,7 @@
 #include "AArch64InstrInfo.h"
 #include "AArch64RegisterInfo.h"
 #include "AArch64SelectionDAGInfo.h"
+#include "llvm/CodeGen/GlobalISel/GISelAccessor.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/Target/TargetSubtargetInfo.h"
 #include <string>
@@ -39,7 +40,8 @@ protected:
     CortexA53,
     CortexA57,
     Cyclone,
-    ExynosM1
+    ExynosM1,
+    Kryo
   };
 
   /// ARMProcFamily - ARM processor family: Cortex-A53, Cortex-A57, and others.
@@ -80,6 +82,11 @@ protected:
   AArch64InstrInfo InstrInfo;
   AArch64SelectionDAGInfo TSInfo;
   AArch64TargetLowering TLInfo;
+  /// Gather the accessor points to GlobalISel-related APIs.
+  /// This is used to avoid ifndefs spreading around while GISel is
+  /// an optional library.
+  std::unique_ptr<GISelAccessor> GISel;
+
 private:
   /// initializeSubtargetDependencies - Initializes using CPUString and the
   /// passed in feature string so that we can use initializer lists for
@@ -92,6 +99,11 @@ public:
   AArch64Subtarget(const Triple &TT, const std::string &CPU,
                    const std::string &FS, const TargetMachine &TM,
                    bool LittleEndian);
+
+  /// This object will take onwership of \p GISelAccessor.
+  void setGISelAccessor(GISelAccessor &GISel) {
+    this->GISel.reset(&GISel);
+  }
 
   const AArch64SelectionDAGInfo *getSelectionDAGInfo() const override {
     return &TSInfo;
@@ -106,10 +118,12 @@ public:
   const AArch64RegisterInfo *getRegisterInfo() const override {
     return &getInstrInfo()->getRegisterInfo();
   }
+  const CallLowering *getCallLowering() const override;
+  const RegisterBankInfo *getRegBankInfo() const override;
   const Triple &getTargetTriple() const { return TargetTriple; }
   bool enableMachineScheduler() const override { return true; }
   bool enablePostRAScheduler() const override {
-    return isGeneric() || isCortexA53() || isCortexA57();
+    return isGeneric() || isCortexA53() || isCortexA57() || isKryo();
   }
 
   bool hasV8_1aOps() const { return HasV8_1aOps; }
@@ -151,6 +165,7 @@ public:
   bool isCortexA57() const { return CPUString == "cortex-a57"; }
   bool isCortexA53() const { return CPUString == "cortex-a53"; }
   bool isExynosM1() const { return CPUString == "exynos-m1"; }
+  bool isKryo() const { return CPUString == "kryo"; }
 
   bool useAA() const override { return isCortexA53(); }
 

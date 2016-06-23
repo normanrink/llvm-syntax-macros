@@ -26,7 +26,6 @@
 #include "llvm/ADT/PostOrderIterator.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallPtrSet.h"
-#include "llvm/ADT/SparseSet.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/CodeGen/LiveInterval.h"
@@ -194,7 +193,7 @@ void StackColoring::getAnalysisUsage(AnalysisUsage &AU) const {
   MachineFunctionPass::getAnalysisUsage(AU);
 }
 
-void StackColoring::dump() const {
+LLVM_DUMP_METHOD void StackColoring::dump() const {
   for (MachineBasicBlock *MBB : depth_first(MF)) {
     DEBUG(dbgs() << "Inspecting block #" << BasicBlocks.lookup(MBB) << " ["
                  << MBB->getName() << "]\n");
@@ -249,11 +248,13 @@ unsigned StackColoring::collectMarkers(unsigned NumSlot) {
           MI.getOpcode() != TargetOpcode::LIFETIME_END)
         continue;
 
-      Markers.push_back(&MI);
-
       bool IsStart = MI.getOpcode() == TargetOpcode::LIFETIME_START;
       const MachineOperand &MO = MI.getOperand(0);
-      unsigned Slot = MO.getIndex();
+      int Slot = MO.getIndex();
+      if (Slot < 0)
+        continue;
+
+      Markers.push_back(&MI);
 
       MarkersFound++;
 
@@ -393,9 +394,10 @@ void StackColoring::calculateLiveIntervals(unsigned NumSlots) {
       bool IsStart = MI->getOpcode() == TargetOpcode::LIFETIME_START;
       const MachineOperand &Mo = MI->getOperand(0);
       int Slot = Mo.getIndex();
-      assert(Slot >= 0 && "Invalid slot");
+      if (Slot < 0)
+        continue;
 
-      SlotIndex ThisIndex = Indexes->getInstructionIndex(MI);
+      SlotIndex ThisIndex = Indexes->getInstructionIndex(*MI);
 
       if (IsStart) {
         if (!Starts[Slot].isValid() || Starts[Slot] > ThisIndex)
@@ -569,7 +571,7 @@ void StackColoring::remapInstructions(DenseMap<int, int> &SlotRemap) {
         // If we *don't* protect the user from escaped allocas, don't bother
         // validating the instructions.
         if (!I.isDebugValue() && TouchesMemory && ProtectFromEscapedAllocas) {
-          SlotIndex Index = Indexes->getInstructionIndex(&I);
+          SlotIndex Index = Indexes->getInstructionIndex(I);
           const LiveInterval *Interval = &*Intervals[FromSlot];
           assert(Interval->find(Index) != Interval->end() &&
                  "Found instruction usage outside of live range.");
@@ -628,7 +630,7 @@ void StackColoring::removeInvalidSlotRanges() {
         // Check that the used slot is inside the calculated lifetime range.
         // If it is not, warn about it and invalidate the range.
         LiveInterval *Interval = &*Intervals[Slot];
-        SlotIndex Index = Indexes->getInstructionIndex(&I);
+        SlotIndex Index = Indexes->getInstructionIndex(I);
         if (Interval->find(Index) == Interval->end()) {
           Interval->clear();
           DEBUG(dbgs()<<"Invalidating range #"<<Slot<<"\n");
@@ -655,7 +657,7 @@ void StackColoring::expungeSlotMap(DenseMap<int, int> &SlotRemap,
 }
 
 bool StackColoring::runOnMachineFunction(MachineFunction &Func) {
-  if (skipOptnoneFunction(*Func.getFunction()))
+  if (skipFunction(*Func.getFunction()))
     return false;
 
   DEBUG(dbgs() << "********** Stack Coloring **********\n"

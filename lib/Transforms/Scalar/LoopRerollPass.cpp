@@ -14,7 +14,7 @@
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/STLExtras.h"
-#include "llvm/ADT/SmallBitVector.h"
+#include "llvm/ADT/BitVector.h"
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/AliasAnalysis.h"
@@ -128,9 +128,8 @@ NumToleratedFailedMatches("reroll-num-tolerated-failed-matches", cl::init(400),
 
 namespace {
   enum IterationLimits {
-    /// The maximum number of iterations that we'll try and reroll. This
-    /// has to be less than 25 in order to fit into a SmallBitVector.
-    IL_MaxRerollIterations = 16,
+    /// The maximum number of iterations that we'll try and reroll.
+    IL_MaxRerollIterations = 32,
     /// The bitvector index used by loop induction variables and other
     /// instructions that belong to all iterations.
     IL_All,
@@ -147,13 +146,8 @@ namespace {
     bool runOnLoop(Loop *L, LPPassManager &LPM) override;
 
     void getAnalysisUsage(AnalysisUsage &AU) const override {
-      AU.addRequired<AAResultsWrapperPass>();
-      AU.addRequired<LoopInfoWrapperPass>();
-      AU.addPreserved<LoopInfoWrapperPass>();
-      AU.addRequired<DominatorTreeWrapperPass>();
-      AU.addPreserved<DominatorTreeWrapperPass>();
-      AU.addRequired<ScalarEvolutionWrapperPass>();
       AU.addRequired<TargetLibraryInfoWrapperPass>();
+      getLoopAnalysisUsage(AU);
     }
 
   protected:
@@ -370,7 +364,7 @@ namespace {
       void replace(const SCEV *IterCount);
 
     protected:
-      typedef MapVector<Instruction*, SmallBitVector> UsesTy;
+      typedef MapVector<Instruction*, BitVector> UsesTy;
 
       bool findRootsRecursive(Instruction *IVU,
                               SmallInstructionSet SubsumedInsts);
@@ -439,10 +433,7 @@ namespace {
 
 char LoopReroll::ID = 0;
 INITIALIZE_PASS_BEGIN(LoopReroll, "loop-reroll", "Reroll loops", false, false)
-INITIALIZE_PASS_DEPENDENCY(AAResultsWrapperPass)
-INITIALIZE_PASS_DEPENDENCY(LoopInfoWrapperPass)
-INITIALIZE_PASS_DEPENDENCY(DominatorTreeWrapperPass)
-INITIALIZE_PASS_DEPENDENCY(ScalarEvolutionWrapperPass)
+INITIALIZE_PASS_DEPENDENCY(LoopPass)
 INITIALIZE_PASS_DEPENDENCY(TargetLibraryInfoWrapperPass)
 INITIALIZE_PASS_END(LoopReroll, "loop-reroll", "Reroll loops", false, false)
 
@@ -1545,7 +1536,7 @@ bool LoopReroll::reroll(Instruction *IV, Loop *L, BasicBlock *Header,
 }
 
 bool LoopReroll::runOnLoop(Loop *L, LPPassManager &LPM) {
-  if (skipOptnoneFunction(L))
+  if (skipLoop(L))
     return false;
 
   AA = &getAnalysis<AAResultsWrapperPass>().getAAResults();
@@ -1560,14 +1551,12 @@ bool LoopReroll::runOnLoop(Loop *L, LPPassManager &LPM) {
         "] Loop %" << Header->getName() << " (" <<
         L->getNumBlocks() << " block(s))\n");
 
-  bool Changed = false;
-
   // For now, we'll handle only single BB loops.
   if (L->getNumBlocks() > 1)
-    return Changed;
+    return false;
 
   if (!SE->hasLoopInvariantBackedgeTakenCount(L))
-    return Changed;
+    return false;
 
   const SCEV *LIBETC = SE->getBackedgeTakenCount(L);
   const SCEV *IterCount = SE->getAddExpr(LIBETC, SE->getOne(LIBETC->getType()));
@@ -1581,11 +1570,12 @@ bool LoopReroll::runOnLoop(Loop *L, LPPassManager &LPM) {
 
   if (PossibleIVs.empty()) {
     DEBUG(dbgs() << "LRR: No possible IVs found\n");
-    return Changed;
+    return false;
   }
 
   ReductionTracker Reductions;
   collectPossibleReductions(L, Reductions);
+  bool Changed = false;
 
   // For each possible IV, collect the associated possible set of 'root' nodes
   // (i+1, i+2, etc.).
@@ -1595,6 +1585,10 @@ bool LoopReroll::runOnLoop(Loop *L, LPPassManager &LPM) {
       Changed = true;
       break;
     }
+
+  // Trip count of L has changed so SE must be re-evaluated.
+  if (Changed)
+    SE->forgetLoop(L);
 
   return Changed;
 }

@@ -42,7 +42,7 @@ struct ArchiveMemberHeader {
   sys::fs::perms getAccessMode() const;
   sys::TimeValue getLastModified() const;
   llvm::StringRef getRawLastModified() const {
-    return StringRef(LastModified, sizeof(LastModified)).rtrim(" ");
+    return StringRef(LastModified, sizeof(LastModified)).rtrim(' ');
   }
   unsigned getUID() const;
   unsigned getGID() const;
@@ -211,6 +211,10 @@ public:
   bool hasSymbolTable() const;
   StringRef getSymbolTable() const { return SymbolTable; }
   uint32_t getNumberOfSymbols() const;
+
+  std::vector<std::unique_ptr<MemoryBuffer>> takeThinBuffers() {
+    return std::move(ThinBuffers);
+  }
 
 private:
   StringRef SymbolTable;

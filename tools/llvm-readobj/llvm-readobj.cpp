@@ -232,7 +232,17 @@ namespace opts {
                               cl::desc("Display ELF section group contents"));
   cl::alias SectionGroupsShort("g", cl::desc("Alias for -elf-sections-groups"),
                                cl::aliasopt(SectionGroups));
+  cl::opt<bool> HashHistogram(
+      "elf-hash-histogram",
+      cl::desc("Display bucket list histogram for hash sections"));
+  cl::alias HashHistogramShort("I", cl::desc("Alias for -elf-hash-histogram"),
+                               cl::aliasopt(HashHistogram));
 
+  cl::opt<OutputStyleTy>
+      Output("elf-output-style", cl::desc("Specify ELF dump style"),
+             cl::values(clEnumVal(LLVM, "LLVM default style"),
+                        clEnumVal(GNU, "GNU readelf style"), clEnumValEnd),
+             cl::init(LLVM));
 } // namespace opts
 
 namespace llvm {
@@ -305,14 +315,15 @@ static void dumpObject(const ObjectFile *Obj) {
   if (std::error_code EC = createDumper(Obj, Writer, Dumper))
     reportError(Obj->getFileName(), EC);
 
-  outs() << '\n';
-  outs() << "File: " << Obj->getFileName() << "\n";
-  outs() << "Format: " << Obj->getFileFormatName() << "\n";
-  outs() << "Arch: "
-         << Triple::getArchTypeName((llvm::Triple::ArchType)Obj->getArch())
-         << "\n";
-  outs() << "AddressSize: " << (8*Obj->getBytesInAddress()) << "bit\n";
-  Dumper->printLoadName();
+  if (opts::Output == opts::LLVM) {
+    outs() << '\n';
+    outs() << "File: " << Obj->getFileName() << "\n";
+    outs() << "Format: " << Obj->getFileFormatName() << "\n";
+    outs() << "Arch: " << Triple::getArchTypeName(
+                              (llvm::Triple::ArchType)Obj->getArch()) << "\n";
+    outs() << "AddressSize: " << (8 * Obj->getBytesInAddress()) << "bit\n";
+    Dumper->printLoadName();
+  }
 
   if (opts::FileHeaders)
     Dumper->printFileHeaders();
@@ -354,6 +365,8 @@ static void dumpObject(const ObjectFile *Obj) {
     }
     if (opts::SectionGroups)
       Dumper->printGroupSections();
+    if (opts::HashHistogram)
+      Dumper->printHashHistogram();
   }
   if (Obj->isCOFF()) {
     if (opts::COFFImports)
@@ -423,9 +436,9 @@ static void dumpMachOUniversalBinary(const MachOUniversalBinary *UBinary) {
 static void dumpInput(StringRef File) {
 
   // Attempt to open the binary.
-  ErrorOr<OwningBinary<Binary>> BinaryOrErr = createBinary(File);
-  if (std::error_code EC = BinaryOrErr.getError())
-    reportError(File, EC);
+  Expected<OwningBinary<Binary>> BinaryOrErr = createBinary(File);
+  if (!BinaryOrErr)
+    reportError(File, errorToErrorCode(BinaryOrErr.takeError()));
   Binary &Binary = *BinaryOrErr.get().getBinary();
 
   if (Archive *Arc = dyn_cast<Archive>(&Binary))

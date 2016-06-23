@@ -151,7 +151,7 @@ public:
   /// function. It also registers itself as the chain that block participates
   /// in with the BlockToChain mapping.
   BlockChain(BlockToChainMapType &BlockToChain, MachineBasicBlock *BB)
-      : Blocks(1, BB), BlockToChain(BlockToChain), LoopPredecessors(0) {
+      : Blocks(1, BB), BlockToChain(BlockToChain), UnscheduledPredecessors(0) {
     assert(BB && "Cannot create a chain with a null basic block");
     BlockToChain[BB] = this;
   }
@@ -203,11 +203,16 @@ public:
   }
 #endif // NDEBUG
 
-  /// \brief Count of predecessors within the loop currently being processed.
+  /// \brief Count of predecessors of any block within the chain which have not
+  /// yet been scheduled.  In general, we will delay scheduling this chain
+  /// until those predecessors are scheduled (or we find a sufficiently good
+  /// reason to override this heuristic.)  Note that when forming loop chains,
+  /// blocks outside the loop are ignored and treated as if they were already
+  /// scheduled.
   ///
-  /// This count is updated at each loop we process to represent the number of
-  /// in-loop predecessors of this chain.
-  unsigned LoopPredecessors;
+  /// Note: This field is reinitialized multiple times - once for each loop,
+  /// and then once for the function as a whole.
+  unsigned UnscheduledPredecessors;
 };
 }
 
@@ -257,20 +262,32 @@ class MachineBlockPlacement : public MachineFunctionPass {
 
   void markChainSuccessors(BlockChain &Chain, MachineBasicBlock *LoopHeaderBB,
                            SmallVectorImpl<MachineBasicBlock *> &BlockWorkList,
+                           SmallVectorImpl<MachineBasicBlock *> &EHPadWorkList,
                            const BlockFilterSet *BlockFilter = nullptr);
   MachineBasicBlock *selectBestSuccessor(MachineBasicBlock *BB,
                                          BlockChain &Chain,
                                          const BlockFilterSet *BlockFilter);
   MachineBasicBlock *
   selectBestCandidateBlock(BlockChain &Chain,
-                           SmallVectorImpl<MachineBasicBlock *> &WorkList,
-                           const BlockFilterSet *BlockFilter);
+                           SmallVectorImpl<MachineBasicBlock *> &WorkList);
   MachineBasicBlock *
   getFirstUnplacedBlock(MachineFunction &F, const BlockChain &PlacedChain,
                         MachineFunction::iterator &PrevUnplacedBlockIt,
                         const BlockFilterSet *BlockFilter);
+
+  /// \brief Add a basic block to the work list if it is apropriate.
+  ///
+  /// If the optional parameter BlockFilter is provided, only MBB
+  /// present in the set will be added to the worklist. If nullptr
+  /// is provided, no filtering occurs.
+  void fillWorkLists(MachineBasicBlock *MBB,
+                     SmallPtrSetImpl<BlockChain *> &UpdatedPreds,
+                     SmallVectorImpl<MachineBasicBlock *> &BlockWorkList,
+                     SmallVectorImpl<MachineBasicBlock *> &EHPadWorkList,
+                     const BlockFilterSet *BlockFilter);
   void buildChain(MachineBasicBlock *BB, BlockChain &Chain,
                   SmallVectorImpl<MachineBasicBlock *> &BlockWorkList,
+                  SmallVectorImpl<MachineBasicBlock *> &EHPadWorkList,
                   const BlockFilterSet *BlockFilter = nullptr);
   MachineBasicBlock *findBestLoopTop(MachineLoop &L,
                                      const BlockFilterSet &LoopBlockSet);
@@ -321,18 +338,7 @@ static std::string getBlockName(MachineBasicBlock *BB) {
   std::string Result;
   raw_string_ostream OS(Result);
   OS << "BB#" << BB->getNumber();
-  OS << " (derived from LLVM BB '" << BB->getName() << "')";
-  OS.flush();
-  return Result;
-}
-
-/// \brief Helper to print the number of a MBB.
-///
-/// Only used by debug logging.
-static std::string getBlockNum(MachineBasicBlock *BB) {
-  std::string Result;
-  raw_string_ostream OS(Result);
-  OS << "BB#" << BB->getNumber();
+  OS << " ('" << BB->getName() << "')";
   OS.flush();
   return Result;
 }
@@ -347,6 +353,7 @@ static std::string getBlockNum(MachineBasicBlock *BB) {
 void MachineBlockPlacement::markChainSuccessors(
     BlockChain &Chain, MachineBasicBlock *LoopHeaderBB,
     SmallVectorImpl<MachineBasicBlock *> &BlockWorkList,
+    SmallVectorImpl<MachineBasicBlock *> &EHPadWorkList,
     const BlockFilterSet *BlockFilter) {
   // Walk all the blocks in this chain, marking their successors as having
   // a predecessor placed.
@@ -365,8 +372,15 @@ void MachineBlockPlacement::markChainSuccessors(
 
       // This is a cross-chain edge that is within the loop, so decrement the
       // loop predecessor count of the destination chain.
-      if (SuccChain.LoopPredecessors > 0 && --SuccChain.LoopPredecessors == 0)
-        BlockWorkList.push_back(*SuccChain.begin());
+      if (SuccChain.UnscheduledPredecessors == 0 ||
+          --SuccChain.UnscheduledPredecessors > 0)
+        continue;
+
+      auto *MBB = *SuccChain.begin();
+      if (MBB->isEHPad())
+        EHPadWorkList.push_back(MBB);
+      else
+        BlockWorkList.push_back(MBB);
     }
   }
 }
@@ -409,13 +423,11 @@ MachineBlockPlacement::selectBestSuccessor(MachineBasicBlock *BB,
   SmallVector<MachineBasicBlock *, 4> Successors;
   for (MachineBasicBlock *Succ : BB->successors()) {
     bool SkipSucc = false;
-    if (BlockFilter && !BlockFilter->count(Succ)) {
+    if (Succ->isEHPad() || (BlockFilter && !BlockFilter->count(Succ))) {
       SkipSucc = true;
     } else {
       BlockChain *SuccChain = BlockToChain[Succ];
       if (SuccChain == &Chain) {
-        DEBUG(dbgs() << "    " << getBlockName(Succ)
-                     << " -> Already merged!\n");
         SkipSucc = true;
       } else if (Succ != *SuccChain->begin()) {
         DEBUG(dbgs() << "    " << getBlockName(Succ) << " -> Mid chain!\n");
@@ -465,7 +477,7 @@ MachineBlockPlacement::selectBestSuccessor(MachineBasicBlock *BB,
     // Only consider successors which are either "hot", or wouldn't violate
     // any CFG constraints.
     BlockChain &SuccChain = *BlockToChain[Succ];
-    if (SuccChain.LoopPredecessors != 0) {
+    if (SuccChain.UnscheduledPredecessors != 0) {
       if (SuccProb < HotProb) {
         DEBUG(dbgs() << "    " << getBlockName(Succ) << " -> " << SuccProb
                      << " (prob) (CFG conflict)\n");
@@ -479,7 +491,8 @@ MachineBlockPlacement::selectBestSuccessor(MachineBasicBlock *BB,
           MBFI->getBlockFreq(BB) * RealSuccProb * HotProb.getCompl();
       bool BadCFGConflict = false;
       for (MachineBasicBlock *Pred : Succ->predecessors()) {
-        if (Pred == Succ || (BlockFilter && !BlockFilter->count(Pred)) ||
+        if (Pred == Succ || BlockToChain[Pred] == &SuccChain ||
+            (BlockFilter && !BlockFilter->count(Pred)) ||
             BlockToChain[Pred] == &Chain)
           continue;
         BlockFrequency PredEdgeFreq =
@@ -498,7 +511,7 @@ MachineBlockPlacement::selectBestSuccessor(MachineBasicBlock *BB,
 
     DEBUG(dbgs() << "    " << getBlockName(Succ) << " -> " << SuccProb
                  << " (prob)"
-                 << (SuccChain.LoopPredecessors != 0 ? " (CFG break)" : "")
+                 << (SuccChain.UnscheduledPredecessors != 0 ? " (CFG break)" : "")
                  << "\n");
     if (BestSucc && BestProb >= SuccProb)
       continue;
@@ -519,8 +532,7 @@ MachineBlockPlacement::selectBestSuccessor(MachineBasicBlock *BB,
 ///
 /// \returns The best block found, or null if none are viable.
 MachineBasicBlock *MachineBlockPlacement::selectBestCandidateBlock(
-    BlockChain &Chain, SmallVectorImpl<MachineBasicBlock *> &WorkList,
-    const BlockFilterSet *BlockFilter) {
+    BlockChain &Chain, SmallVectorImpl<MachineBasicBlock *> &WorkList) {
   // Once we need to walk the worklist looking for a candidate, cleanup the
   // worklist of already placed entries.
   // FIXME: If this shows up on profiles, it could be folded (at the cost of
@@ -531,24 +543,51 @@ MachineBasicBlock *MachineBlockPlacement::selectBestCandidateBlock(
                                 }),
                  WorkList.end());
 
+  if (WorkList.empty())
+    return nullptr;
+
+  bool IsEHPad = WorkList[0]->isEHPad();
+
   MachineBasicBlock *BestBlock = nullptr;
   BlockFrequency BestFreq;
   for (MachineBasicBlock *MBB : WorkList) {
+    assert(MBB->isEHPad() == IsEHPad);
+
     BlockChain &SuccChain = *BlockToChain[MBB];
-    if (&SuccChain == &Chain) {
-      DEBUG(dbgs() << "    " << getBlockName(MBB) << " -> Already merged!\n");
+    if (&SuccChain == &Chain)
       continue;
-    }
-    assert(SuccChain.LoopPredecessors == 0 && "Found CFG-violating block");
+
+    assert(SuccChain.UnscheduledPredecessors == 0 && "Found CFG-violating block");
 
     BlockFrequency CandidateFreq = MBFI->getBlockFreq(MBB);
     DEBUG(dbgs() << "    " << getBlockName(MBB) << " -> ";
           MBFI->printBlockFreq(dbgs(), CandidateFreq) << " (freq)\n");
-    if (BestBlock && BestFreq >= CandidateFreq)
+
+    // For ehpad, we layout the least probable first as to avoid jumping back
+    // from least probable landingpads to more probable ones.
+    //
+    // FIXME: Using probability is probably (!) not the best way to achieve
+    // this. We should probably have a more principled approach to layout
+    // cleanup code.
+    //
+    // The goal is to get:
+    //
+    //                 +--------------------------+
+    //                 |                          V
+    // InnerLp -> InnerCleanup    OuterLp -> OuterCleanup -> Resume
+    //
+    // Rather than:
+    //
+    //                 +-------------------------------------+
+    //                 V                                     |
+    // OuterLp -> OuterCleanup -> Resume     InnerLp -> InnerCleanup
+    if (BestBlock && (IsEHPad ^ (BestFreq >= CandidateFreq)))
       continue;
+
     BestBlock = MBB;
     BestFreq = CandidateFreq;
   }
+
   return BestBlock;
 }
 
@@ -578,9 +617,42 @@ MachineBasicBlock *MachineBlockPlacement::getFirstUnplacedBlock(
   return nullptr;
 }
 
+void MachineBlockPlacement::fillWorkLists(
+    MachineBasicBlock *MBB,
+    SmallPtrSetImpl<BlockChain *> &UpdatedPreds,
+    SmallVectorImpl<MachineBasicBlock *> &BlockWorkList,
+    SmallVectorImpl<MachineBasicBlock *> &EHPadWorkList,
+    const BlockFilterSet *BlockFilter = nullptr) {
+  BlockChain &Chain = *BlockToChain[MBB];
+  if (!UpdatedPreds.insert(&Chain).second)
+    return;
+
+  assert(Chain.UnscheduledPredecessors == 0);
+  for (MachineBasicBlock *ChainBB : Chain) {
+    assert(BlockToChain[ChainBB] == &Chain);
+    for (MachineBasicBlock *Pred : ChainBB->predecessors()) {
+      if (BlockFilter && !BlockFilter->count(Pred))
+        continue;
+      if (BlockToChain[Pred] == &Chain)
+        continue;
+      ++Chain.UnscheduledPredecessors;
+    }
+  }
+
+  if (Chain.UnscheduledPredecessors != 0)
+    return;
+
+  MBB = *Chain.begin();
+  if (MBB->isEHPad())
+    EHPadWorkList.push_back(MBB);
+  else
+    BlockWorkList.push_back(MBB);
+}
+
 void MachineBlockPlacement::buildChain(
     MachineBasicBlock *BB, BlockChain &Chain,
     SmallVectorImpl<MachineBasicBlock *> &BlockWorkList,
+    SmallVectorImpl<MachineBasicBlock *> &EHPadWorkList,
     const BlockFilterSet *BlockFilter) {
   assert(BB);
   assert(BlockToChain[BB] == &Chain);
@@ -588,7 +660,8 @@ void MachineBlockPlacement::buildChain(
   MachineFunction::iterator PrevUnplacedBlockIt = F.begin();
 
   MachineBasicBlock *LoopHeaderBB = BB;
-  markChainSuccessors(Chain, LoopHeaderBB, BlockWorkList, BlockFilter);
+  markChainSuccessors(Chain, LoopHeaderBB, BlockWorkList, EHPadWorkList,
+                      BlockFilter);
   BB = *std::prev(Chain.end());
   for (;;) {
     assert(BB);
@@ -603,7 +676,9 @@ void MachineBlockPlacement::buildChain(
     // block among those we've identified as not violating the loop's CFG at
     // this point. This won't be a fallthrough, but it will increase locality.
     if (!BestSucc)
-      BestSucc = selectBestCandidateBlock(Chain, BlockWorkList, BlockFilter);
+      BestSucc = selectBestCandidateBlock(Chain, BlockWorkList);
+    if (!BestSucc)
+      BestSucc = selectBestCandidateBlock(Chain, EHPadWorkList);
 
     if (!BestSucc) {
       BestSucc =
@@ -617,18 +692,19 @@ void MachineBlockPlacement::buildChain(
 
     // Place this block, updating the datastructures to reflect its placement.
     BlockChain &SuccChain = *BlockToChain[BestSucc];
-    // Zero out LoopPredecessors for the successor we're about to merge in case
+    // Zero out UnscheduledPredecessors for the successor we're about to merge in case
     // we selected a successor that didn't fit naturally into the CFG.
-    SuccChain.LoopPredecessors = 0;
-    DEBUG(dbgs() << "Merging from " << getBlockNum(BB) << " to "
-                 << getBlockNum(BestSucc) << "\n");
-    markChainSuccessors(SuccChain, LoopHeaderBB, BlockWorkList, BlockFilter);
+    SuccChain.UnscheduledPredecessors = 0;
+    DEBUG(dbgs() << "Merging from " << getBlockName(BB) << " to "
+                 << getBlockName(BestSucc) << "\n");
+    markChainSuccessors(SuccChain, LoopHeaderBB, BlockWorkList, EHPadWorkList,
+                        BlockFilter);
     Chain.merge(BestSucc, &SuccChain);
     BB = *std::prev(Chain.end());
   }
 
   DEBUG(dbgs() << "Finished forming chain for header block "
-               << getBlockNum(*Chain.begin()) << "\n");
+               << getBlockName(*Chain.begin()) << "\n");
 }
 
 /// \brief Find the best loop top block for layout.
@@ -675,8 +751,10 @@ MachineBlockPlacement::findBestLoopTop(MachineLoop &L,
   }
 
   // If no direct predecessor is fine, just use the loop header.
-  if (!BestPred)
+  if (!BestPred) {
+    DEBUG(dbgs() << "    final top unchanged\n");
     return L.getHeader();
+  }
 
   // Walk backwards through any straight line of predecessors.
   while (BestPred->pred_size() == 1 &&
@@ -782,7 +860,6 @@ MachineBlockPlacement::findBestLoopExit(MachineFunction &F, MachineLoop &L,
       // Restore the old exiting state, no viable looping successor was found.
       ExitingBB = OldExitingBB;
       BestExitEdgeFreq = OldBestExitEdgeFreq;
-      continue;
     }
   }
   // Without a candidate exiting block or with only a single block in the
@@ -975,7 +1052,7 @@ void MachineBlockPlacement::rotateLoopWithProfile(
       }
     }
 
-    DEBUG(dbgs() << "The cost of loop rotation by making " << getBlockNum(*Iter)
+    DEBUG(dbgs() << "The cost of loop rotation by making " << getBlockName(*Iter)
                  << " to the top: " << Cost.getFrequency() << "\n");
 
     if (Cost < SmallestRotationCost) {
@@ -985,7 +1062,7 @@ void MachineBlockPlacement::rotateLoopWithProfile(
   }
 
   if (RotationPos != LoopChain.end()) {
-    DEBUG(dbgs() << "Rotate loop by making " << getBlockNum(*RotationPos)
+    DEBUG(dbgs() << "Rotate loop by making " << getBlockName(*RotationPos)
                  << " to the top\n");
     std::rotate(LoopChain.begin(), RotationPos, LoopChain.end());
   }
@@ -1041,6 +1118,7 @@ void MachineBlockPlacement::buildLoopChains(MachineFunction &F,
     buildLoopChains(F, *InnerLoop);
 
   SmallVector<MachineBasicBlock *, 16> BlockWorkList;
+  SmallVector<MachineBasicBlock *, 16> EHPadWorkList;
   BlockFilterSet LoopBlockSet = collectLoopBlockSet(F, L);
 
   // Check if we have profile data for this function. If yes, we will rotate
@@ -1070,29 +1148,14 @@ void MachineBlockPlacement::buildLoopChains(MachineFunction &F,
   // walk the blocks, and use a set to prevent visiting a particular chain
   // twice.
   SmallPtrSet<BlockChain *, 4> UpdatedPreds;
-  assert(LoopChain.LoopPredecessors == 0);
+  assert(LoopChain.UnscheduledPredecessors == 0);
   UpdatedPreds.insert(&LoopChain);
 
-  for (MachineBasicBlock *LoopBB : LoopBlockSet) {
-    BlockChain &Chain = *BlockToChain[LoopBB];
-    if (!UpdatedPreds.insert(&Chain).second)
-      continue;
+  for (MachineBasicBlock *LoopBB : LoopBlockSet)
+    fillWorkLists(LoopBB, UpdatedPreds, BlockWorkList, EHPadWorkList,
+                  &LoopBlockSet);
 
-    assert(Chain.LoopPredecessors == 0);
-    for (MachineBasicBlock *ChainBB : Chain) {
-      assert(BlockToChain[ChainBB] == &Chain);
-      for (MachineBasicBlock *Pred : ChainBB->predecessors()) {
-        if (BlockToChain[Pred] == &Chain || !LoopBlockSet.count(Pred))
-          continue;
-        ++Chain.LoopPredecessors;
-      }
-    }
-
-    if (Chain.LoopPredecessors == 0)
-      BlockWorkList.push_back(*Chain.begin());
-  }
-
-  buildChain(LoopTop, LoopChain, BlockWorkList, &LoopBlockSet);
+  buildChain(LoopTop, LoopChain, BlockWorkList, EHPadWorkList, &LoopBlockSet);
 
   if (RotateLoopWithProfile)
     rotateLoopWithProfile(LoopChain, L, LoopBlockSet);
@@ -1102,7 +1165,7 @@ void MachineBlockPlacement::buildLoopChains(MachineFunction &F,
   DEBUG({
     // Crash at the end so we get all of the debugging output first.
     bool BadLoop = false;
-    if (LoopChain.LoopPredecessors) {
+    if (LoopChain.UnscheduledPredecessors) {
       BadLoop = true;
       dbgs() << "Loop chain contains a block without its preds placed!\n"
              << "  Loop header:  " << getBlockName(*L.block_begin()) << "\n"
@@ -1189,29 +1252,14 @@ void MachineBlockPlacement::buildCFGChains(MachineFunction &F) {
     buildLoopChains(F, *L);
 
   SmallVector<MachineBasicBlock *, 16> BlockWorkList;
+  SmallVector<MachineBasicBlock *, 16> EHPadWorkList;
 
   SmallPtrSet<BlockChain *, 4> UpdatedPreds;
-  for (MachineBasicBlock &MBB : F) {
-    BlockChain &Chain = *BlockToChain[&MBB];
-    if (!UpdatedPreds.insert(&Chain).second)
-      continue;
-
-    assert(Chain.LoopPredecessors == 0);
-    for (MachineBasicBlock *ChainBB : Chain) {
-      assert(BlockToChain[ChainBB] == &Chain);
-      for (MachineBasicBlock *Pred : ChainBB->predecessors()) {
-        if (BlockToChain[Pred] == &Chain)
-          continue;
-        ++Chain.LoopPredecessors;
-      }
-    }
-
-    if (Chain.LoopPredecessors == 0)
-      BlockWorkList.push_back(*Chain.begin());
-  }
+  for (MachineBasicBlock &MBB : F)
+    fillWorkLists(&MBB, UpdatedPreds, BlockWorkList, EHPadWorkList);
 
   BlockChain &FunctionChain = *BlockToChain[&F.front()];
-  buildChain(&F.front(), FunctionChain, BlockWorkList);
+  buildChain(&F.front(), FunctionChain, BlockWorkList, EHPadWorkList);
 
 #ifndef NDEBUG
   typedef SmallPtrSet<MachineBasicBlock *, 16> FunctionBlockSetType;
@@ -1382,7 +1430,7 @@ bool MachineBlockPlacement::runOnMachineFunction(MachineFunction &F) {
   if (std::next(F.begin()) == F.end())
     return false;
 
-  if (skipOptnoneFunction(*F.getFunction()))
+  if (skipFunction(*F.getFunction()))
     return false;
 
   MBPI = &getAnalysis<MachineBranchProbabilityInfo>();

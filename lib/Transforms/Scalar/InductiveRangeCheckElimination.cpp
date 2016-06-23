@@ -67,7 +67,6 @@
 #include "llvm/Transforms/Utils/LoopUtils.h"
 #include "llvm/Transforms/Utils/SimplifyIndVar.h"
 #include "llvm/Transforms/Utils/UnrollLoop.h"
-#include <array>
 
 using namespace llvm;
 
@@ -114,7 +113,7 @@ class InductiveRangeCheck {
     RANGE_CHECK_UNKNOWN = (unsigned)-1
   };
 
-  static const char *rangeCheckKindToStr(RangeCheckKind);
+  static StringRef rangeCheckKindToStr(RangeCheckKind);
 
   const SCEV *Offset;
   const SCEV *Scale;
@@ -211,11 +210,8 @@ public:
   }
 
   void getAnalysisUsage(AnalysisUsage &AU) const override {
-    AU.addRequired<LoopInfoWrapperPass>();
-    AU.addRequiredID(LoopSimplifyID);
-    AU.addRequiredID(LCSSAID);
-    AU.addRequired<ScalarEvolutionWrapperPass>();
     AU.addRequired<BranchProbabilityInfoWrapperPass>();
+    getLoopAnalysisUsage(AU);
   }
 
   bool runOnLoop(Loop *L, LPPassManager &LPM) override;
@@ -226,15 +222,12 @@ char InductiveRangeCheckElimination::ID = 0;
 
 INITIALIZE_PASS_BEGIN(InductiveRangeCheckElimination, "irce",
                       "Inductive range check elimination", false, false)
-INITIALIZE_PASS_DEPENDENCY(LoopInfoWrapperPass)
-INITIALIZE_PASS_DEPENDENCY(LoopSimplify)
-INITIALIZE_PASS_DEPENDENCY(LCSSA)
-INITIALIZE_PASS_DEPENDENCY(ScalarEvolutionWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(BranchProbabilityInfoWrapperPass)
+INITIALIZE_PASS_DEPENDENCY(LoopPass)
 INITIALIZE_PASS_END(InductiveRangeCheckElimination, "irce",
                     "Inductive range check elimination", false, false)
 
-const char *InductiveRangeCheck::rangeCheckKindToStr(
+StringRef InductiveRangeCheck::rangeCheckKindToStr(
     InductiveRangeCheck::RangeCheckKind RCK) {
   switch (RCK) {
   case InductiveRangeCheck::RANGE_CHECK_UNKNOWN:
@@ -253,11 +246,9 @@ const char *InductiveRangeCheck::rangeCheckKindToStr(
   llvm_unreachable("unknown range check type!");
 }
 
-/// Parse a single ICmp instruction, `ICI`, into a range check.  If `ICI`
-/// cannot
+/// Parse a single ICmp instruction, `ICI`, into a range check.  If `ICI` cannot
 /// be interpreted as a range check, return `RANGE_CHECK_UNKNOWN` and set
-/// `Index` and `Length` to `nullptr`.  Otherwise set `Index` to the value
-/// being
+/// `Index` and `Length` to `nullptr`.  Otherwise set `Index` to the value being
 /// range checked, and set `Length` to the upper limit `Index` is being range
 /// checked with if (and only if) the range check type is stronger or equal to
 /// RANGE_CHECK_UPPER.
@@ -947,7 +938,7 @@ void LoopConstrainer::cloneLoop(LoopConstrainer::ClonedLoop &Result,
 
     for (Instruction &I : *ClonedBB)
       RemapInstruction(&I, Result.Map,
-                       RF_NoModuleLevelChanges | RF_IgnoreMissingEntries);
+                       RF_NoModuleLevelChanges | RF_IgnoreMissingLocals);
 
     // Exit blocks will now have one more predecessor and their PHI nodes need
     // to be edited to reflect that.  No phi nodes need to be introduced because

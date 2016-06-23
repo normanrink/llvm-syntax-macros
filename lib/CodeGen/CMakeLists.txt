@@ -1,8 +1,3 @@
-set(system_libs)
-if(CMAKE_HOST_UNIX AND LLVM_ENABLE_THREADS AND HAVE_LIBPTHREAD)
-  set(system_libs ${system_libs} pthread)
-endif()
-
 add_llvm_library(LLVMCodeGen
   AggressiveAntiDepBreaker.cpp
   AllocationOrder.cpp
@@ -81,6 +76,7 @@ add_llvm_library(LLVMCodeGen
   MachineSSAUpdater.cpp
   MachineTraceMetrics.cpp
   MachineVerifier.cpp
+  PatchableFunction.cpp
   MIRPrinter.cpp
   MIRPrintingPass.cpp
   OptimizePHIs.cpp
@@ -89,7 +85,9 @@ add_llvm_library(LLVMCodeGen
   PeepholeOptimizer.cpp
   PHIElimination.cpp
   PHIEliminationUtils.cpp
+  PostRAHazardRecognizer.cpp
   PostRASchedulerList.cpp
+  PreISelIntrinsicLowering.cpp
   ProcessImplicitDefs.cpp
   PrologEpilogInserter.cpp
   PseudoSourceValue.cpp
@@ -119,6 +117,7 @@ add_llvm_library(LLVMCodeGen
   StackProtector.cpp
   StackSlotColoring.cpp
   TailDuplication.cpp
+  TailDuplicator.cpp
   TargetFrameLoweringImpl.cpp
   TargetInstrInfo.cpp
   TargetLoweringBase.cpp
@@ -135,7 +134,7 @@ add_llvm_library(LLVMCodeGen
   ${LLVM_MAIN_INCLUDE_DIR}/llvm/CodeGen
   ${LLVM_MAIN_INCLUDE_DIR}/llvm/CodeGen/PBQP
 
-  LINK_LIBS ${system_libs}
+  LINK_LIBS ${PTHREAD_LIB}
   )
 
 add_dependencies(LLVMCodeGen intrinsics_gen)
@@ -143,6 +142,4 @@ add_dependencies(LLVMCodeGen intrinsics_gen)
 add_subdirectory(SelectionDAG)
 add_subdirectory(AsmPrinter)
 add_subdirectory(MIRParser)
-if(LLVM_BUILD_GLOBAL_ISEL)
-  add_subdirectory(GlobalISel)
-endif()
+add_subdirectory(GlobalISel)

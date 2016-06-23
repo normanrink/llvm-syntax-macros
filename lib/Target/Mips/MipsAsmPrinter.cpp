@@ -620,24 +620,6 @@ void MipsAsmPrinter::printOperand(const MachineInstr *MI, int opNum,
   if (closeP) O << ")";
 }
 
-void MipsAsmPrinter::printUnsignedImm(const MachineInstr *MI, int opNum,
-                                      raw_ostream &O) {
-  const MachineOperand &MO = MI->getOperand(opNum);
-  if (MO.isImm())
-    O << (unsigned short int)MO.getImm();
-  else
-    printOperand(MI, opNum, O);
-}
-
-void MipsAsmPrinter::printUnsignedImm8(const MachineInstr *MI, int opNum,
-                                       raw_ostream &O) {
-  const MachineOperand &MO = MI->getOperand(opNum);
-  if (MO.isImm())
-    O << (unsigned short int)(unsigned char)MO.getImm();
-  else
-    printOperand(MI, opNum, O);
-}
-
 void MipsAsmPrinter::
 printMemOperand(const MachineInstr *MI, int opNum, raw_ostream &O) {
   // Load/Store memory operands -- imm($reg)
@@ -1071,10 +1053,9 @@ void MipsAsmPrinter::NaClAlignIndirectJumpTargets(MachineFunction &MF) {
   }
 
   // If basic block address is taken, block can be target of indirect branch.
-  for (MachineFunction::iterator MBB = MF.begin(), E = MF.end();
-                                 MBB != E; ++MBB) {
-    if (MBB->hasAddressTaken())
-      MBB->setAlignment(MIPS_NACL_BUNDLE_ALIGN);
+  for (auto &MBB : MF) {
+    if (MBB.hasAddressTaken())
+      MBB.setAlignment(MIPS_NACL_BUNDLE_ALIGN);
   }
 }
 

@@ -7,7 +7,7 @@ LLVM 3.9 Release Notes
 
 .. warning::
    These are in-progress notes for the upcoming LLVM 3.9 release.  You may
-   prefer the `LLVM 3.7 Release Notes <http://llvm.org/releases/3.7.0/docs
+   prefer the `LLVM 3.8 Release Notes <http://llvm.org/releases/3.8.0/docs
    /ReleaseNotes.html>`_.
 
 
@@ -33,11 +33,33 @@ page <http://llvm.org/releases/>`_.
 
 Non-comprehensive list of changes in this release
 =================================================
+* The LLVMContext gains a new runtime check (see
+  LLVMContext::discardValueNames()) that can be set to discard Value names
+  (other than GlobalValue). This is intended to be used in release builds by
+  clients that are interested in saving CPU/memory as much as possible.
+
+* There is no longer a "global context" available in LLVM, except for the C API.
+
 * .. note about autoconf build having been removed.
 
-* .. note about C API functions LLVMLinkModules, LLVMParseBitcode,
+* .. note about C API functions LLVMParseBitcode,
    LLVMParseBitcodeInContext, LLVMGetBitcodeModuleInContext and
-   LLVMGetBitcodeModule having been removed.
+   LLVMGetBitcodeModule having been removed. LLVMGetTargetMachineData has been
+   removed (use LLVMGetDataLayout instead).
+
+* The C API function LLVMLinkModules has been removed.
+
+* The C API function LLVMAddTargetData has been removed.
+
+* The C API function LLVMGetDataLayout is deprecated
+  in favor of LLVMGetDataLayoutStr.
+
+* The C API enum LLVMAttribute is deprecated in favor of
+  LLVMGetAttrKindID.
+
+* ``TargetFrameLowering::eliminateCallFramePseudoInstr`` now returns an
+  iterator to the next instruction instead of ``void``. Targets that previously
+  did ``MBB.erase(I); return;`` now probably want ``return MBB.erase(I);``.
 
 .. NOTE
    For small 1-3 sentence descriptions, just add an entry at the end of
@@ -58,6 +80,23 @@ Non-comprehensive list of changes in this release
 
    Makes programs 10x faster by doing Special New Thing.
 
+Changes to the LLVM IR
+----------------------
+
+* New intrinsics ``llvm.masked.load``, ``llvm.masked.store``,
+  ``llvm.masked.gather`` and ``llvm.masked.scatter`` were introduced to the
+  LLVM IR to allow selective memory access for vector data types.
+
+Changes to LLVM's IPO model
+---------------------------
+
+LLVM no longer does inter-procedural analysis and optimization (except
+inlining) on functions with comdat linkage.  Doing IPO over such
+functions is unsound because the implementation the linker chooses at
+link-time may be differently optimized than the one what was visible
+during optimization, and may have arbitrarily different observable
+behavior.  See `PR26774 <http://llvm.org/PR26774>`_ for more details.
+
 Changes to the ARM Backend
 --------------------------
 
@@ -73,13 +112,20 @@ Changes to the MIPS Target
 Changes to the PowerPC Target
 -----------------------------
 
- During this release ...
+ Moved some optimizations from O3 to O2 (D18562)
 
+* Enable sibling call optimization on ppc64 ELFv1/ELFv2 abi
 
 Changes to the X86 Target
------------------------------
+-------------------------
 
- During this release ...
+* LLVM now supports the Intel CPU codenamed Skylake Server with AVX-512
+  extensions using ``-march=skylake-avx512``. The switch enables the
+  ISA extensions AVX-512{F, CD, VL, BW, DQ}.
+
+* LLVM now supports the Intel CPU codenamed Knights Landing with AVX-512
+  extensions using ``-march=knl``. The switch enables the ISA extensions
+  AVX-512{F, CD, ER, PF}.
 
 Changes to the AMDGPU Target
 -----------------------------
@@ -92,6 +138,12 @@ Changes to the OCaml bindings
 
  During this release ...
 
+Support for attribute 'notail' has been added
+---------------------------------------------
+
+This marker prevents optimization passes from adding 'tail' or
+'musttail' markers to a call. It is used to prevent tail call
+optimization from being performed on the call.
 
 External Open Source Projects Using LLVM 3.9
 ============================================

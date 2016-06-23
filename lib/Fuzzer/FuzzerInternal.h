@@ -12,6 +12,7 @@
 #ifndef LLVM_FUZZER_INTERNAL_H
 #define LLVM_FUZZER_INTERNAL_H
 
+#include <algorithm>
 #include <cassert>
 #include <chrono>
 #include <climits>
@@ -28,6 +29,7 @@
 namespace fuzzer {
 using namespace std::chrono;
 typedef std::vector<uint8_t> Unit;
+typedef std::vector<Unit> UnitVector;
 
 // A simple POD sized array of bytes.
 template <size_t kMaxSize> class FixedWord {
@@ -62,16 +64,19 @@ private:
 
 typedef FixedWord<27> Word; // 28 bytes.
 
+bool IsFile(const std::string &Path);
 std::string FileToString(const std::string &Path);
-Unit FileToVector(const std::string &Path);
+Unit FileToVector(const std::string &Path, size_t MaxSize = 0);
 void ReadDirToVectorOfUnits(const char *Path, std::vector<Unit> *V,
-                            long *Epoch);
+                            long *Epoch, size_t MaxSize);
 void WriteToFile(const Unit &U, const std::string &Path);
 void CopyFileToErr(const std::string &Path);
 // Returns "Dir/FileName" or equivalent for the current OS.
 std::string DirPlusFile(const std::string &DirPath,
                         const std::string &FileName);
 
+void DupAndCloseStderr();
+void CloseStdout();
 void Printf(const char *Fmt, ...);
 void PrintHexArray(const Unit &U, const char *PrintAfter = "");
 void PrintHexArray(const uint8_t *Data, size_t Size,
@@ -81,8 +86,16 @@ void PrintASCII(const Unit &U, const char *PrintAfter = "");
 void PrintASCII(const Word &W, const char *PrintAfter = "");
 std::string Hash(const Unit &U);
 void SetTimer(int Seconds);
+void SetSigSegvHandler();
+void SetSigBusHandler();
+void SetSigAbrtHandler();
+void SetSigIllHandler();
+void SetSigFpeHandler();
+void SetSigIntHandler();
+void SetSigTermHandler();
 std::string Base64(const Unit &U);
 int ExecuteCommand(const std::string &Command);
+size_t GetPeakRSSMb();
 
 // Private copy of SHA1 implementation.
 static const int kSHA1NumBytes = 20;
@@ -91,11 +104,29 @@ void ComputeSHA1(const uint8_t *Data, size_t Len, uint8_t *Out);
 
 // Changes U to contain only ASCII (isprint+isspace) characters.
 // Returns true iff U has been changed.
-bool ToASCII(Unit &U);
+bool ToASCII(uint8_t *Data, size_t Size);
 bool IsASCII(const Unit &U);
 
 int NumberOfCpuCores();
 int GetPid();
+
+// Clears the current PC Map.
+void PcMapResetCurrent();
+// Merges the current PC Map into the combined one, and clears the former.
+void PcMapMergeCurrentToCombined();
+// Returns the size of the combined PC Map.
+size_t PcMapCombinedSize();
+
+class Random {
+ public:
+  Random(unsigned int seed) : R(seed) {}
+  size_t Rand() { return R(); }
+  size_t RandBool() { return Rand() % 2; }
+  size_t operator()(size_t n) { return n ? Rand() % n : 0; }
+  std::mt19937 &Get_mt19937() { return R; }
+ private:
+  std::mt19937 R;
+};
 
 // Dictionary.
 
@@ -107,10 +138,62 @@ bool ParseOneDictionaryEntry(const std::string &Str, Unit *U);
 // were parsed succesfully.
 bool ParseDictionaryFile(const std::string &Text, std::vector<Unit> *Units);
 
+class DictionaryEntry {
+ public:
+  DictionaryEntry() {}
+  DictionaryEntry(Word W) : W(W) {}
+  DictionaryEntry(Word W, size_t PositionHint) : W(W), PositionHint(PositionHint) {}
+  const Word &GetW() const { return W; }
+
+  bool HasPositionHint() const { return PositionHint != std::numeric_limits<size_t>::max(); }
+  size_t GetPositionHint() const {
+    assert(HasPositionHint());
+    return PositionHint;
+  }
+  void IncUseCount() { UseCount++; }
+  void IncSuccessCount() { SuccessCount++; }
+  size_t GetUseCount() const { return UseCount; }
+  size_t GetSuccessCount() const {return SuccessCount; }
+
+private:
+  Word W;
+  size_t PositionHint = std::numeric_limits<size_t>::max();
+  size_t UseCount = 0;
+  size_t SuccessCount = 0;
+};
+
+class Dictionary {
+ public:
+  static const size_t kMaxDictSize = 1 << 14;
+
+  bool ContainsWord(const Word &W) const {
+    return std::any_of(begin(), end(), [&](const DictionaryEntry &DE) {
+      return DE.GetW() == W;
+    });
+  }
+  const DictionaryEntry *begin() const { return &DE[0]; }
+  const DictionaryEntry *end() const { return begin() + Size; }
+  DictionaryEntry & operator[] (size_t Idx) {
+    assert(Idx < Size);
+    return DE[Idx];
+  }
+  void push_back(DictionaryEntry DE) {
+    if (Size < kMaxDictSize)
+      this->DE[Size++] = DE;
+  }
+  void clear() { Size = 0; }
+  bool empty() const { return Size == 0; }
+  size_t size() const { return Size; }
+
+private:
+  DictionaryEntry DE[kMaxDictSize];
+  size_t Size = 0;
+};
+
 class MutationDispatcher {
 public:
-  MutationDispatcher(FuzzerRandomBase &Rand);
-  ~MutationDispatcher();
+  MutationDispatcher(Random &Rand) : Rand(Rand) {}
+  ~MutationDispatcher() {}
   /// Indicate that we are about to start a new sequence of mutations.
   void StartMutationSequence();
   /// Print the current sequence of mutations.
@@ -160,25 +243,48 @@ public:
   void ClearAutoDictionary();
   void PrintRecommendedDictionary();
 
-  void SetCorpus(const std::vector<Unit> *Corpus);
+  void SetCorpus(const std::vector<Unit> *Corpus) { this->Corpus = Corpus; }
+
+  Random &GetRand() { return Rand; }
 
 private:
-  FuzzerRandomBase &Rand;
-  struct Impl;
-  Impl *MDImpl;
+
+  struct Mutator {
+    size_t (MutationDispatcher::*Fn)(uint8_t *Data, size_t Size, size_t Max);
+    const char *Name;
+  };
+
+  size_t AddWordFromDictionary(Dictionary &D, uint8_t *Data, size_t Size,
+                               size_t MaxSize);
+
+  Random &Rand;
+  // Dictionary provided by the user via -dict=DICT_FILE.
+  Dictionary ManualDictionary;
+  // Temporary dictionary modified by the fuzzer itself,
+  // recreated periodically.
+  Dictionary TempAutoDictionary;
+  // Persistent dictionary modified by the fuzzer, consists of
+  // entries that led to successfull discoveries in the past mutations.
+  Dictionary PersistentAutoDictionary;
+  std::vector<Mutator> CurrentMutatorSequence;
+  std::vector<DictionaryEntry *> CurrentDictionaryEntrySequence;
+  const std::vector<Unit> *Corpus = nullptr;
+  std::vector<uint8_t> MutateInPlaceHere;
+
+  static Mutator Mutators[];
 };
 
 class Fuzzer {
 public:
   struct FuzzingOptions {
     int Verbosity = 1;
-    int MaxLen = 0;
+    size_t MaxLen = 0;
     int UnitTimeoutSec = 300;
-    bool AbortOnTimeout = false;
+    int TimeoutExitCode = 77;
+    int ErrorExitCode = 77;
     int MaxTotalTimeSec = 0;
     bool DoCrossOver = true;
     int MutateDepth = 5;
-    bool ExitOnFirst = false;
     bool UseCounters = false;
     bool UseIndirCalls = true;
     bool UseTraces = false;
@@ -186,21 +292,21 @@ public:
     bool UseFullCoverageSet = false;
     bool Reload = true;
     bool ShuffleAtStartUp = true;
-    int PreferSmallDuringInitialShuffle = -1;
+    bool PreferSmall = true;
     size_t MaxNumberOfRuns = ULONG_MAX;
-    int SyncTimeout = 600;
     int ReportSlowUnits = 10;
     bool OnlyASCII = false;
     std::string OutputCorpus;
-    std::string SyncCommand;
     std::string ArtifactPrefix = "./";
     std::string ExactArtifactPath;
     bool SaveArtifacts = true;
     bool PrintNEW = true; // Print a status line when new units are found;
     bool OutputCSV = false;
     bool PrintNewCovPcs = false;
+    bool PrintFinalStats = false;
+    bool DetectLeaks = false;
   };
-  Fuzzer(UserSuppliedFuzzer &USF, FuzzingOptions Options);
+  Fuzzer(UserCallback CB, MutationDispatcher &MD, FuzzingOptions Options);
   void AddToCorpus(const Unit &U) {
     Corpus.push_back(U);
     UpdateCorpusDistribution();
@@ -213,11 +319,12 @@ public:
   void InitializeTraceState();
   void AssignTaintLabels(uint8_t *Data, size_t Size);
   size_t CorpusSize() const { return Corpus.size(); }
-  void ReadDir(const std::string &Path, long *Epoch) {
+  size_t MaxUnitSizeInCorpus() const;
+  void ReadDir(const std::string &Path, long *Epoch, size_t MaxSize) {
     Printf("Loading corpus: %s\n", Path.c_str());
-    ReadDirToVectorOfUnits(Path.c_str(), &Corpus, Epoch);
+    ReadDirToVectorOfUnits(Path.c_str(), &Corpus, Epoch, MaxSize);
   }
-  void RereadOutputCorpus();
+  void RereadOutputCorpus(size_t MaxSize);
   // Save the current corpus to OutputCorpus.
   void SaveCorpus();
 
@@ -225,36 +332,53 @@ public:
     return duration_cast<seconds>(system_clock::now() - ProcessStartTime)
         .count();
   }
+  size_t execPerSec() {
+    size_t Seconds = secondsSinceProcessStartUp();
+    return Seconds ? TotalNumberOfRuns / Seconds : 0;
+  }
 
   size_t getTotalNumberOfRuns() { return TotalNumberOfRuns; }
 
   static void StaticAlarmCallback();
+  static void StaticCrashSignalCallback();
+  static void StaticInterruptCallback();
 
-  void ExecuteCallback(const Unit &U);
+  void ExecuteCallback(const uint8_t *Data, size_t Size);
 
   // Merge Corpora[1:] into Corpora[0].
   void Merge(const std::vector<std::string> &Corpora);
+  // Returns a subset of 'Extra' that adds coverage to 'Initial'.
+  UnitVector FindExtraUnits(const UnitVector &Initial, const UnitVector &Extra);
+  MutationDispatcher &GetMD() { return MD; }
+  void PrintFinalStats();
+  void SetMaxLen(size_t MaxLen);
 
 private:
   void AlarmCallback();
+  void CrashCallback();
+  void InterruptCallback();
   void MutateAndTestOne();
   void ReportNewCoverage(const Unit &U);
-  bool RunOne(const Unit &U);
-  void RunOneAndUpdateCorpus(Unit &U);
+  bool RunOne(const uint8_t *Data, size_t Size);
+  bool RunOne(const Unit &U) { return RunOne(U.data(), U.size()); }
+  void RunOneAndUpdateCorpus(uint8_t *Data, size_t Size);
   void WriteToOutputCorpus(const Unit &U);
   void WriteUnitToFileWithPrefix(const Unit &U, const char *Prefix);
   void PrintStats(const char *Where, const char *End = "\n");
   void PrintStatusForNewUnit(const Unit &U);
+  void ShuffleCorpus(UnitVector *V);
+  void TryDetectingAMemoryLeak(uint8_t *Data, size_t Size);
+  void CheckForMemoryLeaks();
+
   // Updates the probability distribution for the units in the corpus.
   // Must be called whenever the corpus or unit weights are changed.
   void UpdateCorpusDistribution();
-
-  void SyncCorpus();
 
   size_t RecordBlockCoverage();
   size_t RecordCallerCalleeCoverage();
   void PrepareCoverageBeforeRun();
   bool CheckCoverageAfterRun();
+  void ResetCoverage();
 
   // Trace-based fuzzing: we run a unit with some kind of tracing
   // enabled and record potentially useful mutations. Then
@@ -267,13 +391,16 @@ private:
 
   void SetDeathCallback();
   static void StaticDeathCallback();
+  void DumpCurrentUnit(const char *Prefix);
   void DeathCallback();
 
-  uint8_t *CurrentUnitData;
-  size_t CurrentUnitSize;
+  uint8_t *CurrentUnitData = nullptr;
+  size_t CurrentUnitSize = 0;
 
   size_t TotalNumberOfRuns = 0;
-  size_t TotalNumberOfExecutedTraceBasedMutations = 0;
+  size_t NumberOfNewUnitsAdded = 0;
+
+  bool HasMoreMallocsThanFrees = false;
 
   std::vector<Unit> Corpus;
   std::unordered_set<std::string> UnitHashesAddedToCorpus;
@@ -287,36 +414,20 @@ private:
     return Res;
   }
 
-  // TODO(krasin): remove GetRand from UserSuppliedFuzzer,
-  // and fully rely on the generator and the seed.
-  // The user supplied fuzzer will have a way to access the
-  // generator for its own purposes (like seeding the custom
-  // PRNG).
-  std::mt19937 Generator;
+  std::vector<uint8_t> MutateInPlaceHere;
+
   std::piecewise_constant_distribution<double> CorpusDistribution;
-  UserSuppliedFuzzer &USF;
+  UserCallback CB;
+  MutationDispatcher &MD;
   FuzzingOptions Options;
   system_clock::time_point ProcessStartTime = system_clock::now();
-  system_clock::time_point LastExternalSync = system_clock::now();
   system_clock::time_point UnitStartTime;
   long TimeOfLongestUnitInSeconds = 0;
   long EpochOfLastReadOfOutputCorpus = 0;
   size_t LastRecordedBlockCoverage = 0;
+  size_t LastRecordedPcMapSize = 0;
   size_t LastRecordedCallerCalleeCoverage = 0;
   size_t LastCoveragePcBufferLen = 0;
-};
-
-class SimpleUserSuppliedFuzzer : public UserSuppliedFuzzer {
-public:
-  SimpleUserSuppliedFuzzer(FuzzerRandomBase *Rand, UserCallback Callback)
-      : UserSuppliedFuzzer(Rand), Callback(Callback) {}
-
-  virtual int TargetFunction(const uint8_t *Data, size_t Size) override {
-    return Callback(Data, Size);
-  }
-
-private:
-  UserCallback Callback = nullptr;
 };
 
 }; // namespace fuzzer

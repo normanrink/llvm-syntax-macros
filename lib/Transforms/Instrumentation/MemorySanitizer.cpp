@@ -91,7 +91,6 @@
 
 //===----------------------------------------------------------------------===//
 
-#include "llvm/Transforms/Instrumentation.h"
 #include "llvm/ADT/DepthFirstIterator.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
@@ -109,9 +108,9 @@
 #include "llvm/IR/Type.h"
 #include "llvm/IR/ValueMap.h"
 #include "llvm/Support/CommandLine.h"
-#include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Transforms/Instrumentation.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Utils/ModuleUtils.h"
@@ -189,6 +188,12 @@ static cl::opt<int> ClInstrumentationWithCallThreshold(
 // ignored in the instrumentation.
 static cl::opt<bool> ClCheckConstantShadow("msan-check-constant-shadow",
        cl::desc("Insert checks for constant shadow values"),
+       cl::Hidden, cl::init(false));
+
+// This is off by default because of a bug in gold:
+// https://sourceware.org/bugzilla/show_bug.cgi?id=19002
+static cl::opt<bool> ClWithComdat("msan-with-comdat",
+       cl::desc("Place MSan constructors in comdat sections"),
        cl::Hidden, cl::init(false));
 
 static const char *const kMsanModuleCtorName = "msan.module_ctor";
@@ -540,8 +545,14 @@ bool MemorySanitizer::doInitialization(Module &M) {
       createSanitizerCtorAndInitFunctions(M, kMsanModuleCtorName, kMsanInitName,
                                           /*InitArgTypes=*/{},
                                           /*InitArgs=*/{});
+  if (ClWithComdat) {
+    Comdat *MsanCtorComdat = M.getOrInsertComdat(kMsanModuleCtorName);
+    MsanCtorFunction->setComdat(MsanCtorComdat);
+    appendToGlobalCtors(M, MsanCtorFunction, 0, MsanCtorFunction);
+  } else {
+    appendToGlobalCtors(M, MsanCtorFunction, 0);
+  }
 
-  appendToGlobalCtors(M, MsanCtorFunction, 0);
 
   if (TrackOrigins)
     new GlobalVariable(M, IRB.getInt32Ty(), true, GlobalValue::WeakODRLinkage,
@@ -1210,34 +1221,34 @@ struct MemorySanitizerVisitor : public InstVisitor<MemorySanitizerVisitor> {
 
   AtomicOrdering addReleaseOrdering(AtomicOrdering a) {
     switch (a) {
-      case NotAtomic:
-        return NotAtomic;
-      case Unordered:
-      case Monotonic:
-      case Release:
-        return Release;
-      case Acquire:
-      case AcquireRelease:
-        return AcquireRelease;
-      case SequentiallyConsistent:
-        return SequentiallyConsistent;
+      case AtomicOrdering::NotAtomic:
+        return AtomicOrdering::NotAtomic;
+      case AtomicOrdering::Unordered:
+      case AtomicOrdering::Monotonic:
+      case AtomicOrdering::Release:
+        return AtomicOrdering::Release;
+      case AtomicOrdering::Acquire:
+      case AtomicOrdering::AcquireRelease:
+        return AtomicOrdering::AcquireRelease;
+      case AtomicOrdering::SequentiallyConsistent:
+        return AtomicOrdering::SequentiallyConsistent;
     }
     llvm_unreachable("Unknown ordering");
   }
 
   AtomicOrdering addAcquireOrdering(AtomicOrdering a) {
     switch (a) {
-      case NotAtomic:
-        return NotAtomic;
-      case Unordered:
-      case Monotonic:
-      case Acquire:
-        return Acquire;
-      case Release:
-      case AcquireRelease:
-        return AcquireRelease;
-      case SequentiallyConsistent:
-        return SequentiallyConsistent;
+      case AtomicOrdering::NotAtomic:
+        return AtomicOrdering::NotAtomic;
+      case AtomicOrdering::Unordered:
+      case AtomicOrdering::Monotonic:
+      case AtomicOrdering::Acquire:
+        return AtomicOrdering::Acquire;
+      case AtomicOrdering::Release:
+      case AtomicOrdering::AcquireRelease:
+        return AtomicOrdering::AcquireRelease;
+      case AtomicOrdering::SequentiallyConsistent:
+        return AtomicOrdering::SequentiallyConsistent;
     }
     llvm_unreachable("Unknown ordering");
   }
@@ -2275,10 +2286,10 @@ struct MemorySanitizerVisitor : public InstVisitor<MemorySanitizerVisitor> {
     case llvm::Intrinsic::bswap:
       handleBswap(I);
       break;
-    case llvm::Intrinsic::x86_avx512_cvtsd2usi64:
-    case llvm::Intrinsic::x86_avx512_cvtsd2usi:
-    case llvm::Intrinsic::x86_avx512_cvtss2usi64:
-    case llvm::Intrinsic::x86_avx512_cvtss2usi:
+    case llvm::Intrinsic::x86_avx512_vcvtsd2usi64:
+    case llvm::Intrinsic::x86_avx512_vcvtsd2usi32:
+    case llvm::Intrinsic::x86_avx512_vcvtss2usi64:
+    case llvm::Intrinsic::x86_avx512_vcvtss2usi32:
     case llvm::Intrinsic::x86_avx512_cvttss2usi64:
     case llvm::Intrinsic::x86_avx512_cvttss2usi:
     case llvm::Intrinsic::x86_avx512_cvttsd2usi64:
@@ -2954,15 +2965,16 @@ struct VarArgMIPS64Helper : public VarArgHelper {
     const DataLayout &DL = F.getParent()->getDataLayout();
     for (CallSite::arg_iterator ArgIt = CS.arg_begin() + 1, End = CS.arg_end();
          ArgIt != End; ++ArgIt) {
+      llvm::Triple TargetTriple(F.getParent()->getTargetTriple());
       Value *A = *ArgIt;
       Value *Base;
       uint64_t ArgSize = DL.getTypeAllocSize(A->getType());
-#if defined(__MIPSEB__) || defined(MIPSEB)
-      // Adjusting the shadow for argument with size < 8 to match the placement
-      // of bits in big endian system
-      if (ArgSize < 8)
-        VAArgOffset += (8 - ArgSize);
-#endif
+      if (TargetTriple.getArch() == llvm::Triple::mips64) {
+        // Adjusting the shadow for argument with size < 8 to match the placement
+        // of bits in big endian system
+        if (ArgSize < 8)
+          VAArgOffset += (8 - ArgSize);
+      }
       Base = getShadowPtrForVAArgument(A->getType(), IRB, VAArgOffset);
       VAArgOffset += ArgSize;
       VAArgOffset = alignTo(VAArgOffset, 8);

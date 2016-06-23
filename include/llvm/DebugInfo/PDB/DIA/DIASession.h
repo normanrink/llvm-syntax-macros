@@ -11,10 +11,11 @@
 #define LLVM_DEBUGINFO_PDB_DIA_DIASESSION_H
 
 #include "DIASupport.h"
-#include "llvm/ADT/StringRef.h"
 #include "llvm/DebugInfo/PDB/IPDBSession.h"
 
 namespace llvm {
+class StringRef;
+
 class DIASession : public IPDBSession {
 public:
   explicit DIASession(CComPtr<IDiaSession> DiaSession);
@@ -33,8 +34,24 @@ public:
   findSymbolByAddress(uint64_t Address, PDB_SymType Type) const override;
 
   std::unique_ptr<IPDBEnumLineNumbers>
+  findLineNumbers(const PDBSymbolCompiland &Compiland,
+                  const IPDBSourceFile &File) const override;
+  std::unique_ptr<IPDBEnumLineNumbers>
   findLineNumbersByAddress(uint64_t Address, uint32_t Length) const override;
 
+  std::unique_ptr<IPDBEnumSourceFiles>
+  findSourceFiles(const PDBSymbolCompiland *Compiland, llvm::StringRef Pattern,
+                  PDB_NameSearchFlags Flags) const override;
+  std::unique_ptr<IPDBSourceFile>
+  findOneSourceFile(const PDBSymbolCompiland *Compiland,
+                    llvm::StringRef Pattern,
+                    PDB_NameSearchFlags Flags) const override;
+  std::unique_ptr<IPDBEnumChildren<PDBSymbolCompiland>>
+  findCompilandsForSourceFile(llvm::StringRef Pattern,
+                              PDB_NameSearchFlags Flags) const override;
+  std::unique_ptr<PDBSymbolCompiland>
+  findOneCompilandForSourceFile(llvm::StringRef Pattern,
+                                PDB_NameSearchFlags Flags) const override;
   std::unique_ptr<IPDBEnumSourceFiles> getAllSourceFiles() const override;
   std::unique_ptr<IPDBEnumSourceFiles> getSourceFilesForCompiland(
       const PDBSymbolCompiland &Compiland) const override;

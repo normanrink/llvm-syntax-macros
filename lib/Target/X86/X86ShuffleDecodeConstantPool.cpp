@@ -40,24 +40,43 @@ void DecodePSHUFBMask(const Constant *C, SmallVectorImpl<int> &ShuffleMask) {
   assert(MaskTySize == 128 || MaskTySize == 256 || MaskTySize == 512);
 #endif
 
-  // This is a straightforward byte vector.
-  if (MaskTy->isVectorTy() && MaskTy->getVectorElementType()->isIntegerTy(8)) {
-    int NumElements = MaskTy->getVectorNumElements();
-    ShuffleMask.reserve(NumElements);
+  if (!MaskTy->isVectorTy())
+    return;
+  int NumElts = MaskTy->getVectorNumElements();
 
-    for (int i = 0; i < NumElements; ++i) {
+  Type *EltTy = MaskTy->getVectorElementType();
+  if (!EltTy->isIntegerTy())
+    return;
+
+  // The shuffle mask requires a byte vector - decode cases with
+  // wider elements as well.
+  unsigned BitWidth = cast<IntegerType>(EltTy)->getBitWidth();
+  if ((BitWidth % 8) != 0)
+    return;
+
+  int Scale = BitWidth / 8;
+  int NumBytes = NumElts * Scale;
+  ShuffleMask.reserve(NumBytes);
+
+  for (int i = 0; i != NumElts; ++i) {
+    Constant *COp = C->getAggregateElement(i);
+    if (!COp) {
+      ShuffleMask.clear();
+      return;
+    } else if (isa<UndefValue>(COp)) {
+      ShuffleMask.append(Scale, SM_SentinelUndef);
+      continue;
+    }
+
+    APInt APElt = cast<ConstantInt>(COp)->getValue();
+    for (int j = 0; j != Scale; ++j) {
       // For AVX vectors with 32 bytes the base of the shuffle is the 16-byte
       // lane of the vector we're inside.
-      int Base = i & ~0xf;
-      Constant *COp = C->getAggregateElement(i);
-      if (!COp) {
-        ShuffleMask.clear();
-        return;
-      } else if (isa<UndefValue>(COp)) {
-        ShuffleMask.push_back(SM_SentinelUndef);
-        continue;
-      }
-      uint64_t Element = cast<ConstantInt>(COp)->getZExtValue();
+      int Base = ((i * Scale) + j) & ~0xf;
+
+      uint64_t Element = APElt.getLoBits(8).getZExtValue();
+      APElt = APElt.lshr(8);
+
       // If the high bit (7) of the byte is set, the element is zeroed.
       if (Element & (1 << 7))
         ShuffleMask.push_back(SM_SentinelZero);
@@ -68,7 +87,8 @@ void DecodePSHUFBMask(const Constant *C, SmallVectorImpl<int> &ShuffleMask) {
       }
     }
   }
-  // TODO: Handle funny-looking vectors too.
+
+  assert(NumBytes == (int)ShuffleMask.size() && "Unexpected shuffle mask size");
 }
 
 void DecodeVPERMILPMask(const Constant *C, unsigned ElSize,
@@ -99,7 +119,7 @@ void DecodeVPERMILPMask(const Constant *C, unsigned ElSize,
     return;
 
   // Support any element type from byte up to element size.
-  // This is necesary primarily because 64-bit elements get split to 32-bit
+  // This is necessary primarily because 64-bit elements get split to 32-bit
   // in the constant pool on 32-bit target.
   unsigned EltTySize = VecEltTy->getIntegerBitWidth();
   if (EltTySize < 8 || EltTySize > ElSize)
@@ -131,6 +151,74 @@ void DecodeVPERMILPMask(const Constant *C, unsigned ElSize,
   }
 
   // TODO: Handle funny-looking vectors too.
+}
+
+void DecodeVPPERMMask(const Constant *C, SmallVectorImpl<int> &ShuffleMask) {
+  Type *MaskTy = C->getType();
+  assert(MaskTy->getPrimitiveSizeInBits() == 128);
+
+  // Only support vector types.
+  if (!MaskTy->isVectorTy())
+    return;
+
+  // Make sure its an integer type.
+  Type *VecEltTy = MaskTy->getVectorElementType();
+  if (!VecEltTy->isIntegerTy())
+    return;
+
+  // The shuffle mask requires a byte vector - decode cases with
+  // wider elements as well.
+  unsigned BitWidth = cast<IntegerType>(VecEltTy)->getBitWidth();
+  if ((BitWidth % 8) != 0)
+    return;
+
+  int NumElts = MaskTy->getVectorNumElements();
+  int Scale = BitWidth / 8;
+  int NumBytes = NumElts * Scale;
+  ShuffleMask.reserve(NumBytes);
+
+  for (int i = 0; i != NumElts; ++i) {
+    Constant *COp = C->getAggregateElement(i);
+    if (!COp) {
+      ShuffleMask.clear();
+      return;
+    } else if (isa<UndefValue>(COp)) {
+      ShuffleMask.append(Scale, SM_SentinelUndef);
+      continue;
+    }
+
+    // VPPERM Operation
+    // Bits[4:0] - Byte Index (0 - 31)
+    // Bits[7:5] - Permute Operation
+    //
+    // Permute Operation:
+    // 0 - Source byte (no logical operation).
+    // 1 - Invert source byte.
+    // 2 - Bit reverse of source byte.
+    // 3 - Bit reverse of inverted source byte.
+    // 4 - 00h (zero - fill).
+    // 5 - FFh (ones - fill).
+    // 6 - Most significant bit of source byte replicated in all bit positions.
+    // 7 - Invert most significant bit of source byte and replicate in all bit positions.
+    APInt MaskElt = cast<ConstantInt>(COp)->getValue();
+    for (int j = 0; j != Scale; ++j) {
+      APInt Index = MaskElt.getLoBits(5);
+      APInt PermuteOp = MaskElt.lshr(5).getLoBits(3);
+      MaskElt = MaskElt.lshr(8);
+
+      if (PermuteOp == 4) {
+        ShuffleMask.push_back(SM_SentinelZero);
+        continue;
+      }
+      if (PermuteOp != 0) {
+        ShuffleMask.clear();
+        return;
+      }
+      ShuffleMask.push_back((int)Index.getZExtValue());
+    }
+  }
+
+  assert(NumBytes == (int)ShuffleMask.size() && "Unexpected shuffle mask size");
 }
 
 void DecodeVPERMVMask(const Constant *C, MVT VT,
@@ -171,6 +259,7 @@ void DecodeVPERMV3Mask(const Constant *C, MVT VT,
   Type *MaskTy = C->getType();
   unsigned NumElements = MaskTy->getVectorNumElements();
   if (NumElements == VT.getVectorNumElements()) {
+    unsigned EltMaskSize = Log2_64(NumElements * 2);
     for (unsigned i = 0; i < NumElements; ++i) {
       Constant *COp = C->getAggregateElement(i);
       if (!COp) {
@@ -180,9 +269,9 @@ void DecodeVPERMV3Mask(const Constant *C, MVT VT,
       if (isa<UndefValue>(COp))
         ShuffleMask.push_back(SM_SentinelUndef);
       else {
-        uint64_t Element = cast<ConstantInt>(COp)->getZExtValue();
-        Element &= (1 << NumElements*2) - 1;
-        ShuffleMask.push_back(Element);
+        APInt Element = cast<ConstantInt>(COp)->getValue();
+        Element = Element.getLoBits(EltMaskSize);
+        ShuffleMask.push_back(Element.getZExtValue());
       }
     }
   }

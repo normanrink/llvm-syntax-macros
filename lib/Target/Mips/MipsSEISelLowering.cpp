@@ -1401,8 +1401,8 @@ static SDValue lowerMSASplatZExt(SDValue Op, unsigned OpNr, SelectionDAG &DAG) {
   SDValue Ops[16] = { LaneA, LaneB, LaneA, LaneB, LaneA, LaneB, LaneA, LaneB,
                       LaneA, LaneB, LaneA, LaneB, LaneA, LaneB, LaneA, LaneB };
 
-  SDValue Result = DAG.getNode(ISD::BUILD_VECTOR, DL, ViaVecTy,
-                       makeArrayRef(Ops, ViaVecTy.getVectorNumElements()));
+  SDValue Result = DAG.getBuildVector(
+      ViaVecTy, DL, makeArrayRef(Ops, ViaVecTy.getVectorNumElements()));
 
   if (ViaVecTy != ResVecTy)
     Result = DAG.getNode(ISD::BITCAST, DL, ResVecTy, Result);
@@ -1442,8 +1442,8 @@ static SDValue getBuildVectorSplat(EVT VecTy, SDValue SplatValue,
                       SplatValueA, SplatValueB, SplatValueA, SplatValueB,
                       SplatValueA, SplatValueB, SplatValueA, SplatValueB };
 
-  SDValue Result = DAG.getNode(ISD::BUILD_VECTOR, DL, ViaVecTy,
-                       makeArrayRef(Ops, ViaVecTy.getVectorNumElements()));
+  SDValue Result = DAG.getBuildVector(
+      ViaVecTy, DL, makeArrayRef(Ops, ViaVecTy.getVectorNumElements()));
 
   if (VecTy != ViaVecTy)
     Result = DAG.getNode(ISD::BITCAST, DL, VecTy, Result);
@@ -1471,10 +1471,10 @@ static SDValue lowerMSABinaryBitImmIntr(SDValue Op, SelectionDAG &DAG,
       if (BigEndian)
         std::swap(BitImmLoOp, BitImmHiOp);
 
-      Exp2Imm =
-          DAG.getNode(ISD::BITCAST, DL, MVT::v2i64,
-                      DAG.getNode(ISD::BUILD_VECTOR, DL, MVT::v4i32, BitImmLoOp,
-                                  BitImmHiOp, BitImmLoOp, BitImmHiOp));
+      Exp2Imm = DAG.getNode(
+          ISD::BITCAST, DL, MVT::v2i64,
+          DAG.getBuildVector(MVT::v4i32, DL,
+                             {BitImmLoOp, BitImmHiOp, BitImmLoOp, BitImmHiOp}));
     }
   }
 
@@ -1860,7 +1860,7 @@ SDValue MipsSETargetLowering::lowerINTRINSIC_WO_CHAIN(SDValue Op,
 
     // If ResTy is v2i64 then the type legalizer will break this node down into
     // an equivalent v4i32.
-    return DAG.getNode(ISD::BUILD_VECTOR, DL, ResTy, Ops);
+    return DAG.getBuildVector(ResTy, DL, Ops);
   }
   case Intrinsic::mips_fexp2_w:
   case Intrinsic::mips_fexp2_d: {
@@ -2311,7 +2311,7 @@ lowerEXTRACT_VECTOR_ELT(SDValue Op, SelectionDAG &DAG) const {
 }
 
 static bool isConstantOrUndef(const SDValue Op) {
-  if (Op->getOpcode() == ISD::UNDEF)
+  if (Op->isUndef())
     return true;
   if (isa<ConstantSDNode>(Op))
     return true;
@@ -2841,7 +2841,7 @@ static SDValue lowerVECTOR_SHUFFLE_VSHF(SDValue Op, EVT ResTy,
        ++I)
     Ops.push_back(DAG.getTargetConstant(*I, DL, MaskEltTy));
 
-  SDValue MaskVec = DAG.getNode(ISD::BUILD_VECTOR, DL, MaskVecTy, Ops);
+  SDValue MaskVec = DAG.getBuildVector(MaskVecTy, DL, Ops);
 
   if (Using1stVec && Using2ndVec) {
     Op0 = Op->getOperand(0);
@@ -2883,26 +2883,20 @@ SDValue MipsSETargetLowering::lowerVECTOR_SHUFFLE(SDValue Op,
   // MipsISD::VSHF.
   if (isVECTOR_SHUFFLE_SPLATI(Op, ResTy, Indices, DAG))
     return lowerVECTOR_SHUFFLE_VSHF(Op, ResTy, Indices, DAG);
-  SDValue Result = lowerVECTOR_SHUFFLE_ILVEV(Op, ResTy, Indices, DAG);
-  if (Result.getNode())
+  SDValue Result;
+  if ((Result = lowerVECTOR_SHUFFLE_ILVEV(Op, ResTy, Indices, DAG)))
     return Result;
-  Result = lowerVECTOR_SHUFFLE_ILVOD(Op, ResTy, Indices, DAG);
-  if (Result.getNode())
+  if ((Result = lowerVECTOR_SHUFFLE_ILVOD(Op, ResTy, Indices, DAG)))
     return Result;
-  Result = lowerVECTOR_SHUFFLE_ILVL(Op, ResTy, Indices, DAG);
-  if (Result.getNode())
+  if ((Result = lowerVECTOR_SHUFFLE_ILVL(Op, ResTy, Indices, DAG)))
     return Result;
-  Result = lowerVECTOR_SHUFFLE_ILVR(Op, ResTy, Indices, DAG);
-  if (Result.getNode())
+  if ((Result = lowerVECTOR_SHUFFLE_ILVR(Op, ResTy, Indices, DAG)))
     return Result;
-  Result = lowerVECTOR_SHUFFLE_PCKEV(Op, ResTy, Indices, DAG);
-  if (Result.getNode())
+  if ((Result = lowerVECTOR_SHUFFLE_PCKEV(Op, ResTy, Indices, DAG)))
     return Result;
-  Result = lowerVECTOR_SHUFFLE_PCKOD(Op, ResTy, Indices, DAG);
-  if (Result.getNode())
+  if ((Result = lowerVECTOR_SHUFFLE_PCKOD(Op, ResTy, Indices, DAG)))
     return Result;
-  Result = lowerVECTOR_SHUFFLE_SHF(Op, ResTy, Indices, DAG);
-  if (Result.getNode())
+  if ((Result = lowerVECTOR_SHUFFLE_SHF(Op, ResTy, Indices, DAG)))
     return Result;
   return lowerVECTOR_SHUFFLE_VSHF(Op, ResTy, Indices, DAG);
 }

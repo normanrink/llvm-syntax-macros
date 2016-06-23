@@ -149,6 +149,18 @@ def FeatureCIInsts : SubtargetFeature<"ci-insts",
   "Additional intstructions for CI+"
 >;
 
+def FeatureSMemRealTime : SubtargetFeature<"s-memrealtime",
+  "HasSMemRealTime",
+  "true",
+  "Has s_memrealtime instruction"
+>;
+
+def Feature16BitInsts : SubtargetFeature<"16-bit-insts",
+  "Has16BitInsts",
+  "true",
+  "Has i16/f16 instructions"
+>;
+
 //===------------------------------------------------------------===//
 // Subtarget Features (options and debugging)
 //===------------------------------------------------------------===//
@@ -175,12 +187,16 @@ def FeatureFPExceptions : SubtargetFeature<"fp-exceptions",
   "Enable floating point exceptions"
 >;
 
-def FeatureEnableHugeScratchBuffer : SubtargetFeature<
-  "huge-scratch-buffer",
-  "EnableHugeScratchBuffer",
-  "true",
-  "Enable scratch buffer sizes greater than 128 GB"
+class FeatureMaxPrivateElementSize<int size> : SubtargetFeature<
+  "max-private-element-size-"#size,
+  "MaxPrivateElementSize",
+  !cast<string>(size),
+  "Maximum private access size may be "#size
 >;
+
+def FeatureMaxPrivateElementSize4 : FeatureMaxPrivateElementSize<4>;
+def FeatureMaxPrivateElementSize8 : FeatureMaxPrivateElementSize<8>;
+def FeatureMaxPrivateElementSize16 : FeatureMaxPrivateElementSize<16>;
 
 def FeatureVGPRSpilling : SubtargetFeature<"vgpr-spilling",
   "EnableVGPRSpilling",
@@ -296,7 +312,27 @@ def FeatureSeaIslands : SubtargetFeatureGeneration<"SEA_ISLANDS",
 def FeatureVolcanicIslands : SubtargetFeatureGeneration<"VOLCANIC_ISLANDS",
   [FeatureFP64, FeatureLocalMemorySize65536,
    FeatureWavefrontSize64, FeatureFlatAddressSpace, FeatureGCN,
-   FeatureGCN3Encoding, FeatureCIInsts]
+   FeatureGCN3Encoding, FeatureCIInsts, Feature16BitInsts,
+   FeatureSMemRealTime
+  ]
+>;
+
+//===----------------------------------------------------------------------===//
+// Debugger related subtarget features.
+//===----------------------------------------------------------------------===//
+
+def FeatureDebuggerInsertNops : SubtargetFeature<
+  "amdgpu-debugger-insert-nops",
+  "DebuggerInsertNops",
+  "true",
+  "Insert two nop instructions for each high level source statement"
+>;
+
+def FeatureDebuggerReserveTrapRegs : SubtargetFeature<
+  "amdgpu-debugger-reserve-trap-regs",
+  "DebuggerReserveTrapVGPRs",
+  "true",
+  "Reserve VGPRs for trap handler usage"
 >;
 
 //===----------------------------------------------------------------------===//

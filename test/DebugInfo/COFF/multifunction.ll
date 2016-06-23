@@ -29,7 +29,7 @@
 ; X86:      calll   _z
 ; X86:      .cv_loc 0 1 5 43 # source.c:5:43
 ; X86:      ret
-; X86-NEXT: [[END_OF_X:.*]]:
+; X86:      [[END_OF_X:.?Lfunc_end.*]]:
 ;
 ; X86-LABEL: _y:
 ; X86:      # BB
@@ -37,7 +37,7 @@
 ; X86:      calll   _z
 ; X86:      .cv_loc 1 1 9 53 # source.c:9:53
 ; X86:      ret
-; X86-NEXT: [[END_OF_Y:.*]]:
+; X86:      [[END_OF_Y:.?Lfunc_end.*]]:
 ;
 ; X86-LABEL: _f:
 ; X86:      # BB
@@ -49,77 +49,83 @@
 ; X86:      calll   _z
 ; X86:      .cv_loc 2 1 15 73 # source.c:15:73
 ; X86:      ret
-; X86-NEXT: [[END_OF_F:.*]]:
+; X86:      [[END_OF_F:.?Lfunc_end.*]]:
 ;
 ; X86-LABEL: .section        .debug$S,"dr"
 ; X86-NEXT: .long   4
 ; Symbol subsection for x
 ; X86-NEXT: .long   241
-; X86-NEXT: .long [[F1_END:.*]]-[[F1_START:.*]]
+; X86-NEXT: .long [[F1_END:.*]]-[[F1_START:.*]] #
 ; X86-NEXT: [[F1_START]]:
-; X86-NEXT: .short [[PROC_SEGMENT_END:.*]]-[[PROC_SEGMENT_START:.*]]
+; X86-NEXT: .short [[PROC_SEGMENT_END:.*]]-[[PROC_SEGMENT_START:.*]] #
 ; X86-NEXT: [[PROC_SEGMENT_START]]:
 ; X86-NEXT: .short  4423
-; X86-NEXT: .zero   12
+; X86-NEXT: .long   0
+; X86-NEXT: .long   0
+; X86-NEXT: .long   0
 ; X86-NEXT: .long [[END_OF_X]]-_x
-; X86-NEXT: .zero   12
+; X86-NEXT: .long   0
+; X86-NEXT: .long   0
+; X86-NEXT: .long   0
 ; X86-NEXT: .secrel32 _x
 ; X86-NEXT: .secidx _x
 ; X86-NEXT: .byte   0
-; X86-NEXT: .byte   120
-; X86-NEXT: .byte   0
+; X86-NEXT: .asciz "x"
 ; X86-NEXT: [[PROC_SEGMENT_END]]:
 ; X86-NEXT: .short  2
 ; X86-NEXT: .short  4431
 ; X86-NEXT: [[F1_END]]:
-; Padding
-; X86-NEXT: .zero   3
+; X86-NEXT: .p2align 2
 ; Line table subsection for x
 ; X86: .cv_linetable 0, _x, [[END_OF_X]]
 ; Symbol subsection for y
 ; X86-NEXT: .long   241
-; X86-NEXT: .long [[F1_END:.*]]-[[F1_START:.*]]
+; X86-NEXT: .long [[F1_END:.*]]-[[F1_START:.*]] #
 ; X86-NEXT: [[F1_START]]:
-; X86-NEXT: .short [[PROC_SEGMENT_END:.*]]-[[PROC_SEGMENT_START:.*]]
+; X86-NEXT: .short [[PROC_SEGMENT_END:.*]]-[[PROC_SEGMENT_START:.*]] #
 ; X86-NEXT: [[PROC_SEGMENT_START]]:
 ; X86-NEXT: .short  4423
-; X86-NEXT: .zero   12
+; X86-NEXT: .long   0
+; X86-NEXT: .long   0
+; X86-NEXT: .long   0
 ; X86-NEXT: .long [[END_OF_Y]]-_y
-; X86-NEXT: .zero   12
+; X86-NEXT: .long   0
+; X86-NEXT: .long   0
+; X86-NEXT: .long   0
 ; X86-NEXT: .secrel32 _y
 ; X86-NEXT: .secidx _y
 ; X86-NEXT: .byte   0
-; X86-NEXT: .byte   121
-; X86-NEXT: .byte   0
+; X86-NEXT: .asciz "y"
 ; X86-NEXT: [[PROC_SEGMENT_END]]:
 ; X86-NEXT: .short  2
 ; X86-NEXT: .short  4431
 ; X86-NEXT: [[F1_END]]:
-; Padding
-; X86-NEXT: .zero   3
+; X86-NEXT: .p2align 2
 ; Line table subsection for y
 ; X86: .cv_linetable 1, _y, [[END_OF_Y]]
 ; Symbol subsection for f
 ; X86-NEXT: .long   241
-; X86-NEXT: .long [[F1_END:.*]]-[[F1_START:.*]]
+; X86-NEXT: .long [[F1_END:.*]]-[[F1_START:.*]] #
 ; X86-NEXT: [[F1_START]]:
-; X86-NEXT: .short [[PROC_SEGMENT_END:.*]]-[[PROC_SEGMENT_START:.*]]
+; X86-NEXT: .short [[PROC_SEGMENT_END:.*]]-[[PROC_SEGMENT_START:.*]] #
 ; X86-NEXT: [[PROC_SEGMENT_START]]:
 ; X86-NEXT: .short  4423
-; X86-NEXT: .zero   12
+; X86-NEXT: .long   0
+; X86-NEXT: .long   0
+; X86-NEXT: .long   0
 ; X86-NEXT: .long [[END_OF_F]]-_f
-; X86-NEXT: .zero   12
+; X86-NEXT: .long   0
+; X86-NEXT: .long   0
+; X86-NEXT: .long   0
 ; X86-NEXT: .secrel32 _f
 ; X86-NEXT: .secidx _f
 ; X86-NEXT: .byte   0
-; X86-NEXT: .byte   102
-; X86-NEXT: .byte   0
+; X86-NEXT: .asciz "f"
 ; X86-NEXT: [[PROC_SEGMENT_END]]:
 ; X86-NEXT: .short  2
 ; X86-NEXT: .short  4431
 ; X86-NEXT: [[F1_END]]:
-; Padding
-; X86-NEXT: .zero   3
+; X86-NEXT: .p2align 2
 ; Line table subsection for f
 ; X86: .cv_linetable 2, _f, [[END_OF_F]]
 ; X86: .cv_filechecksums
@@ -191,14 +197,14 @@
 ; OBJ32-NEXT:     +0x0 [
 ; OBJ32-NEXT:       LineNumberStart: 4
 ; OBJ32-NEXT:       LineNumberEndDelta: 0
-; OBJ32-NEXT:       IsStatement: Yes
+; OBJ32-NEXT:       IsStatement: No
 ; OBJ32-NEXT:       ColStart: 42
 ; OBJ32-NEXT:       ColEnd: 0
 ; OBJ32-NEXT:     ]
 ; OBJ32-NEXT:     +0x5 [
 ; OBJ32-NEXT:       LineNumberStart: 5
 ; OBJ32-NEXT:       LineNumberEndDelta: 0
-; OBJ32-NEXT:       IsStatement: Yes
+; OBJ32-NEXT:       IsStatement: No
 ; OBJ32-NEXT:       ColStart: 43
 ; OBJ32-NEXT:       ColEnd: 0
 ; OBJ32-NEXT:     ]
@@ -213,14 +219,14 @@
 ; OBJ32-NEXT:     +0x0 [
 ; OBJ32-NEXT:       LineNumberStart: 8
 ; OBJ32-NEXT:       LineNumberEndDelta: 0
-; OBJ32-NEXT:       IsStatement: Yes
+; OBJ32-NEXT:       IsStatement: No
 ; OBJ32-NEXT:       ColStart: 52
 ; OBJ32-NEXT:       ColEnd: 0
 ; OBJ32-NEXT:     ]
 ; OBJ32-NEXT:     +0x5 [
 ; OBJ32-NEXT:       LineNumberStart: 9
 ; OBJ32-NEXT:       LineNumberEndDelta: 0
-; OBJ32-NEXT:       IsStatement: Yes
+; OBJ32-NEXT:       IsStatement: No
 ; OBJ32-NEXT:       ColStart: 53
 ; OBJ32-NEXT:       ColEnd: 0
 ; OBJ32-NEXT:     ]
@@ -235,28 +241,28 @@
 ; OBJ32-NEXT:     +0x0 [
 ; OBJ32-NEXT:       LineNumberStart: 12
 ; OBJ32-NEXT:       LineNumberEndDelta: 0
-; OBJ32-NEXT:       IsStatement: Yes
+; OBJ32-NEXT:       IsStatement: No
 ; OBJ32-NEXT:       ColStart: 62
 ; OBJ32-NEXT:       ColEnd: 0
 ; OBJ32-NEXT:     ]
 ; OBJ32-NEXT:     +0x5 [
 ; OBJ32-NEXT:       LineNumberStart: 13
 ; OBJ32-NEXT:       LineNumberEndDelta: 0
-; OBJ32-NEXT:       IsStatement: Yes
+; OBJ32-NEXT:       IsStatement: No
 ; OBJ32-NEXT:       ColStart: 63
 ; OBJ32-NEXT:       ColEnd: 0
 ; OBJ32-NEXT:     ]
 ; OBJ32-NEXT:     +0xA [
 ; OBJ32-NEXT:       LineNumberStart: 14
 ; OBJ32-NEXT:       LineNumberEndDelta: 0
-; OBJ32-NEXT:       IsStatement: Yes
+; OBJ32-NEXT:       IsStatement: No
 ; OBJ32-NEXT:       ColStart: 72
 ; OBJ32-NEXT:       ColEnd: 0
 ; OBJ32-NEXT:     ]
 ; OBJ32-NEXT:     +0xF [
 ; OBJ32-NEXT:       LineNumberStart: 15
 ; OBJ32-NEXT:       LineNumberEndDelta: 0
-; OBJ32-NEXT:       IsStatement: Yes
+; OBJ32-NEXT:       IsStatement: No
 ; OBJ32-NEXT:       ColStart: 73
 ; OBJ32-NEXT:       ColEnd: 0
 ; OBJ32-NEXT:     ]
@@ -275,7 +281,7 @@
 ; X64:      .cv_loc 0 1 5 43 # source.c:5:43
 ; X64:      addq    $40, %rsp
 ; X64-NEXT: ret
-; X64-NEXT: [[END_OF_X:.*]]:
+; X64:      [[END_OF_X:.?Lfunc_end.*]]:
 ;
 ; X64-LABEL: y:
 ; X64-NEXT: .L{{.*}}:
@@ -287,7 +293,7 @@
 ; X64:      .cv_loc 1 1 9 53 # source.c:9:53
 ; X64:      addq    $40, %rsp
 ; X64-NEXT: ret
-; X64-NEXT: [[END_OF_Y:.*]]:
+; X64:      [[END_OF_Y:.?Lfunc_end.*]]:
 ;
 ; X64-LABEL: f:
 ; X64-NEXT: .L{{.*}}:
@@ -303,77 +309,83 @@
 ; X64:      .cv_loc 2 1 15 73 # source.c:15:73
 ; X64:      addq    $40, %rsp
 ; X64-NEXT: ret
-; X64-NEXT: [[END_OF_F:.*]]:
+; X64:      [[END_OF_F:.?Lfunc_end.*]]:
 ;
 ; X64-LABEL: .section        .debug$S,"dr"
 ; X64-NEXT: .long   4
 ; Symbol subsection for x
 ; X64-NEXT: .long   241
-; X64-NEXT: .long [[F1_END:.*]]-[[F1_START:.*]]
+; X64-NEXT: .long [[F1_END:.*]]-[[F1_START:.*]] #
 ; X64-NEXT: [[F1_START]]:
-; X64-NEXT: .short [[PROC_SEGMENT_END:.*]]-[[PROC_SEGMENT_START:.*]]
+; X64-NEXT: .short [[PROC_SEGMENT_END:.*]]-[[PROC_SEGMENT_START:.*]] #
 ; X64-NEXT: [[PROC_SEGMENT_START]]:
 ; X64-NEXT: .short  4423
-; X64-NEXT: .zero   12
+; X64-NEXT: .long   0
+; X64-NEXT: .long   0
+; X64-NEXT: .long   0
 ; X64-NEXT: .long [[END_OF_X]]-x
-; X64-NEXT: .zero   12
+; X64-NEXT: .long   0
+; X64-NEXT: .long   0
+; X64-NEXT: .long   0
 ; X64-NEXT: .secrel32 x
 ; X64-NEXT: .secidx x
 ; X64-NEXT: .byte   0
-; X64-NEXT: .byte   120
-; X64-NEXT: .byte   0
+; X64-NEXT: .asciz "x"
 ; X64-NEXT: [[PROC_SEGMENT_END]]:
 ; X64-NEXT: .short  2
 ; X64-NEXT: .short  4431
 ; X64-NEXT: [[F1_END]]:
-; Padding
-; X64-NEXT: .zero   3
+; X64-NEXT: .p2align 2
 ; Line table subsection for x
 ; X64: .cv_linetable 0, x, [[END_OF_X]]
 ; Symbol subsection for y
 ; X64-NEXT: .long   241
-; X64-NEXT: .long [[F1_END:.*]]-[[F1_START:.*]]
+; X64-NEXT: .long [[F1_END:.*]]-[[F1_START:.*]] #
 ; X64-NEXT: [[F1_START]]:
-; X64-NEXT: .short [[PROC_SEGMENT_END:.*]]-[[PROC_SEGMENT_START:.*]]
+; X64-NEXT: .short [[PROC_SEGMENT_END:.*]]-[[PROC_SEGMENT_START:.*]] #
 ; X64-NEXT: [[PROC_SEGMENT_START]]:
 ; X64-NEXT: .short  4423
-; X64-NEXT: .zero   12
+; X64-NEXT: .long   0
+; X64-NEXT: .long   0
+; X64-NEXT: .long   0
 ; X64-NEXT: .long [[END_OF_Y]]-y
-; X64-NEXT: .zero   12
+; X64-NEXT: .long   0
+; X64-NEXT: .long   0
+; X64-NEXT: .long   0
 ; X64-NEXT: .secrel32 y
 ; X64-NEXT: .secidx y
 ; X64-NEXT: .byte   0
-; X64-NEXT: .byte   121
-; X64-NEXT: .byte   0
+; X64-NEXT: .asciz "y"
 ; X64-NEXT: [[PROC_SEGMENT_END]]:
 ; X64-NEXT: .short  2
 ; X64-NEXT: .short  4431
 ; X64-NEXT: [[F1_END]]:
-; Padding
-; X64-NEXT: .zero   3
+; X64-NEXT: .p2align 2
 ; Line table subsection for y
 ; X64: .cv_linetable 1, y, [[END_OF_Y]]
 ; Symbol subsection for f
 ; X64-NEXT: .long   241
-; X64-NEXT: .long [[F1_END:.*]]-[[F1_START:.*]]
+; X64-NEXT: .long [[F1_END:.*]]-[[F1_START:.*]] #
 ; X64-NEXT: [[F1_START]]:
-; X64-NEXT: .short [[PROC_SEGMENT_END:.*]]-[[PROC_SEGMENT_START:.*]]
+; X64-NEXT: .short [[PROC_SEGMENT_END:.*]]-[[PROC_SEGMENT_START:.*]] #
 ; X64-NEXT: [[PROC_SEGMENT_START]]:
 ; X64-NEXT: .short  4423
-; X64-NEXT: .zero   12
+; X64-NEXT: .long   0
+; X64-NEXT: .long   0
+; X64-NEXT: .long   0
 ; X64-NEXT: .long [[END_OF_F]]-f
-; X64-NEXT: .zero   12
+; X64-NEXT: .long   0
+; X64-NEXT: .long   0
+; X64-NEXT: .long   0
 ; X64-NEXT: .secrel32 f
 ; X64-NEXT: .secidx f
 ; X64-NEXT: .byte   0
-; X64-NEXT: .byte   102
-; X64-NEXT: .byte   0
+; X64-NEXT: .asciz "f"
 ; X64-NEXT: [[PROC_SEGMENT_END]]:
 ; X64-NEXT: .short  2
 ; X64-NEXT: .short  4431
 ; X64-NEXT: [[F1_END]]:
-; Padding
-; X64-NEXT: .zero   3
+; X64-NEXT: .p2align 2
 ; Line table subsection for f
 ; X64: .cv_linetable 2, f, [[END_OF_F]]
 ; File index to string table offset subsection
@@ -447,21 +459,21 @@
 ; OBJ64-NEXT:     +0x0 [
 ; OBJ64-NEXT:       LineNumberStart: 3
 ; OBJ64-NEXT:       LineNumberEndDelta: 0
-; OBJ64-NEXT:       IsStatement: Yes
+; OBJ64-NEXT:       IsStatement: No
 ; OBJ64-NEXT:       ColStart: 0
 ; OBJ64-NEXT:       ColEnd: 0
 ; OBJ64-NEXT:     ]
 ; OBJ64-NEXT:     +0x4 [
 ; OBJ64-NEXT:       LineNumberStart: 4
 ; OBJ64-NEXT:       LineNumberEndDelta: 0
-; OBJ64-NEXT:       IsStatement: Yes
+; OBJ64-NEXT:       IsStatement: No
 ; OBJ64-NEXT:       ColStart: 42
 ; OBJ64-NEXT:       ColEnd: 0
 ; OBJ64-NEXT:     ]
 ; OBJ64-NEXT:     +0x9 [
 ; OBJ64-NEXT:       LineNumberStart: 5
 ; OBJ64-NEXT:       LineNumberEndDelta: 0
-; OBJ64-NEXT:       IsStatement: Yes
+; OBJ64-NEXT:       IsStatement: No
 ; OBJ64-NEXT:       ColStart: 43
 ; OBJ64-NEXT:       ColEnd: 0
 ; OBJ64-NEXT:     ]
@@ -476,21 +488,21 @@
 ; OBJ64-NEXT:     +0x0 [
 ; OBJ64-NEXT:       LineNumberStart: 7
 ; OBJ64-NEXT:       LineNumberEndDelta: 0
-; OBJ64-NEXT:       IsStatement: Yes
+; OBJ64-NEXT:       IsStatement: No
 ; OBJ64-NEXT:       ColStart: 0
 ; OBJ64-NEXT:       ColEnd: 0
 ; OBJ64-NEXT:     ]
 ; OBJ64-NEXT:     +0x4 [
 ; OBJ64-NEXT:       LineNumberStart: 8
 ; OBJ64-NEXT:       LineNumberEndDelta: 0
-; OBJ64-NEXT:       IsStatement: Yes
+; OBJ64-NEXT:       IsStatement: No
 ; OBJ64-NEXT:       ColStart: 52
 ; OBJ64-NEXT:       ColEnd: 0
 ; OBJ64-NEXT:     ]
 ; OBJ64-NEXT:     +0x9 [
 ; OBJ64-NEXT:       LineNumberStart: 9
 ; OBJ64-NEXT:       LineNumberEndDelta: 0
-; OBJ64-NEXT:       IsStatement: Yes
+; OBJ64-NEXT:       IsStatement: No
 ; OBJ64-NEXT:       ColStart: 53
 ; OBJ64-NEXT:       ColEnd: 0
 ; OBJ64-NEXT:     ]
@@ -505,35 +517,35 @@
 ; OBJ64-NEXT:     +0x0 [
 ; OBJ64-NEXT:       LineNumberStart: 11
 ; OBJ64-NEXT:       LineNumberEndDelta: 0
-; OBJ64-NEXT:       IsStatement: Yes
+; OBJ64-NEXT:       IsStatement: No
 ; OBJ64-NEXT:       ColStart: 0
 ; OBJ64-NEXT:       ColEnd: 0
 ; OBJ64-NEXT:     ]
 ; OBJ64-NEXT:     +0x4 [
 ; OBJ64-NEXT:       LineNumberStart: 12
 ; OBJ64-NEXT:       LineNumberEndDelta: 0
-; OBJ64-NEXT:       IsStatement: Yes
+; OBJ64-NEXT:       IsStatement: No
 ; OBJ64-NEXT:       ColStart: 62
 ; OBJ64-NEXT:       ColEnd: 0
 ; OBJ64-NEXT:     ]
 ; OBJ64-NEXT:     +0x9 [
 ; OBJ64-NEXT:       LineNumberStart: 13
 ; OBJ64-NEXT:       LineNumberEndDelta: 0
-; OBJ64-NEXT:       IsStatement: Yes
+; OBJ64-NEXT:       IsStatement: No
 ; OBJ64-NEXT:       ColStart: 63
 ; OBJ64-NEXT:       ColEnd: 0
 ; OBJ64-NEXT:     ]
 ; OBJ64-NEXT:     +0xE [
 ; OBJ64-NEXT:       LineNumberStart: 14
 ; OBJ64-NEXT:       LineNumberEndDelta: 0
-; OBJ64-NEXT:       IsStatement: Yes
+; OBJ64-NEXT:       IsStatement: No
 ; OBJ64-NEXT:       ColStart: 72
 ; OBJ64-NEXT:       ColEnd: 0
 ; OBJ64-NEXT:     ]
 ; OBJ64-NEXT:     +0x13 [
 ; OBJ64-NEXT:       LineNumberStart: 15
 ; OBJ64-NEXT:       LineNumberEndDelta: 0
-; OBJ64-NEXT:       IsStatement: Yes
+; OBJ64-NEXT:       IsStatement: No
 ; OBJ64-NEXT:       ColStart: 73
 ; OBJ64-NEXT:       ColEnd: 0
 ; OBJ64-NEXT:     ]
@@ -572,17 +584,16 @@ attributes #1 = { "less-precise-fpmad"="false" "no-frame-pointer-elim"="false" "
 !llvm.module.flags = !{!11, !12}
 !llvm.ident = !{!13}
 
-!0 = distinct !DICompileUnit(language: DW_LANG_C99, producer: "clang version 3.5 ", isOptimized: false, emissionKind: 0, file: !1, enums: !2, retainedTypes: !2, subprograms: !3, globals: !2, imports: !2)
+!0 = distinct !DICompileUnit(language: DW_LANG_C99, producer: "clang version 3.5 ", isOptimized: false, emissionKind: FullDebug, file: !1, enums: !2, retainedTypes: !2, globals: !2, imports: !2)
 !1 = !DIFile(filename: "<unknown>", directory: "D:\5C")
 !2 = !{}
-!3 = !{!4, !9, !10}
-!4 = distinct !DISubprogram(name: "x", line: 3, isLocal: false, isDefinition: true, virtualIndex: 6, flags: DIFlagPrototyped, isOptimized: false, scopeLine: 3, file: !5, scope: !6, type: !7, variables: !2)
+!4 = distinct !DISubprogram(name: "x", line: 3, isLocal: false, isDefinition: true, virtualIndex: 6, flags: DIFlagPrototyped, isOptimized: false, unit: !0, scopeLine: 3, file: !5, scope: !6, type: !7, variables: !2)
 !5 = !DIFile(filename: "source.c", directory: "D:\5C")
 !6 = !DIFile(filename: "source.c", directory: "D:C")
 !7 = !DISubroutineType(types: !8)
 !8 = !{null}
-!9 = distinct !DISubprogram(name: "y", line: 7, isLocal: false, isDefinition: true, virtualIndex: 6, flags: DIFlagPrototyped, isOptimized: false, scopeLine: 7, file: !5, scope: !6, type: !7, variables: !2)
-!10 = distinct !DISubprogram(name: "f", line: 11, isLocal: false, isDefinition: true, virtualIndex: 6, flags: DIFlagPrototyped, isOptimized: false, scopeLine: 11, file: !5, scope: !6, type: !7, variables: !2)
+!9 = distinct !DISubprogram(name: "y", line: 7, isLocal: false, isDefinition: true, virtualIndex: 6, flags: DIFlagPrototyped, isOptimized: false, unit: !0, scopeLine: 7, file: !5, scope: !6, type: !7, variables: !2)
+!10 = distinct !DISubprogram(name: "f", line: 11, isLocal: false, isDefinition: true, virtualIndex: 6, flags: DIFlagPrototyped, isOptimized: false, unit: !0, scopeLine: 11, file: !5, scope: !6, type: !7, variables: !2)
 !11 = !{i32 2, !"CodeView", i32 1}
 !12 = !{i32 1, !"Debug Info Version", i32 3}
 !13 = !{!"clang version 3.5 "}

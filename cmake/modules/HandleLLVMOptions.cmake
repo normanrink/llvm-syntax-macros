@@ -6,54 +6,12 @@
 # else.
 string(TOUPPER "${CMAKE_BUILD_TYPE}" uppercase_CMAKE_BUILD_TYPE)
 
+include(CheckCompilerVersion)
 include(HandleLLVMStdlib)
 include(AddLLVMDefinitions)
 include(CheckCCompilerFlag)
 include(CheckCXXCompilerFlag)
 
-if(NOT LLVM_FORCE_USE_OLD_TOOLCHAIN)
-  if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-    if(CMAKE_CXX_COMPILER_VERSION VERSION_LESS 4.7)
-      message(FATAL_ERROR "Host GCC version must be at least 4.7!")
-    endif()
-  elseif(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
-    if(CMAKE_CXX_COMPILER_VERSION VERSION_LESS 3.1)
-      message(FATAL_ERROR "Host Clang version must be at least 3.1!")
-    endif()
-
-    if (CMAKE_CXX_SIMULATE_ID MATCHES "MSVC")
-      if (CMAKE_CXX_SIMULATE_VERSION VERSION_LESS 18.0)
-        message(FATAL_ERROR "Host Clang must have at least -fms-compatibility-version=18.0")
-      endif()
-      set(CLANG_CL 1)
-    elseif(NOT LLVM_ENABLE_LIBCXX)
-      # Otherwise, test that we aren't using too old of a version of libstdc++
-      # with the Clang compiler. This is tricky as there is no real way to
-      # check the version of libstdc++ directly. Instead we test for a known
-      # bug in libstdc++4.6 that is fixed in libstdc++4.7.
-      set(OLD_CMAKE_REQUIRED_FLAGS ${CMAKE_REQUIRED_FLAGS})
-      set(OLD_CMAKE_REQUIRED_LIBRARIES ${CMAKE_REQUIRED_LIBRARIES})
-      set(CMAKE_REQUIRED_FLAGS "-std=c++0x")
-      check_cxx_source_compiles("
-#include <atomic>
-std::atomic<float> x(0.0f);
-int main() { return (float)x; }"
-        LLVM_NO_OLD_LIBSTDCXX)
-      if(NOT LLVM_NO_OLD_LIBSTDCXX)
-        message(FATAL_ERROR "Host Clang must be able to find libstdc++4.7 or newer!")
-      endif()
-      set(CMAKE_REQUIRED_FLAGS ${OLD_CMAKE_REQUIRED_FLAGS})
-      set(CMAKE_REQUIRED_LIBRARIES ${OLD_CMAKE_REQUIRED_LIBRARIES})
-    endif()
-  elseif(CMAKE_CXX_COMPILER_ID MATCHES "MSVC")
-    if(CMAKE_CXX_COMPILER_VERSION VERSION_LESS 18.0)
-      message(FATAL_ERROR "Host Visual Studio must be at least 2013")
-    elseif(CMAKE_CXX_COMPILER_VERSION VERSION_LESS 18.0.31101)
-      message(WARNING "Host Visual Studio should at least be 2013 Update 4 (MSVC 18.0.31101)"
-        "  due to miscompiles from earlier versions")
-    endif()
-  endif()
-endif()
 
 if (CMAKE_LINKER MATCHES "lld-link.exe")
   # Pass /MANIFEST:NO so that CMake doesn't run mt.exe on our binaries.  Adding
@@ -328,6 +286,7 @@ if( MSVC )
         # C4592 is disabled because of false positives in Visual Studio 2015
         # Update 1. Re-evaluate the usefulness of this diagnostic with Update 2.
     -wd4592 # Suppress ''var': symbol will be dynamically initialized (implementation limitation)
+    -wd4319 # Suppress ''operator' : zero extending 'type' to 'type' of greater size'
 
 	# Ideally, we'd like this warning to be enabled, but MSVC 2013 doesn't
 	# support the 'aligned' attribute in the way that clang sources requires (for
@@ -336,7 +295,7 @@ if( MSVC )
 	# When we switch to requiring a version of MSVC that supports the 'alignas'
 	# specifier (MSVC 2015?) this warning can be re-enabled.
     -wd4324 # Suppress 'structure was padded due to __declspec(align())'
-	    
+
     # Promoted warnings.
     -w14062 # Promote 'enumerator in switch of enum is not handled' to level 1 warning.
 
@@ -387,6 +346,19 @@ if( MSVC )
 
   # "Enforce type conversion rules".
   append("/Zc:rvalueCast" CMAKE_CXX_FLAGS)
+
+  if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    # Find and run MSVC (not clang-cl) and get its version. This will tell
+    # clang-cl what version of MSVC to pretend to be so that the STL works.
+    execute_process(COMMAND "$ENV{VSINSTALLDIR}/VC/bin/cl.exe"
+      OUTPUT_QUIET
+      ERROR_VARIABLE MSVC_COMPAT_VERSION
+      )
+    string(REGEX REPLACE "^.*Compiler Version ([0-9.]+) for .*$" "\\1"
+      MSVC_COMPAT_VERSION "${MSVC_COMPAT_VERSION}")
+    append("-fms-compatibility-version=${MSVC_COMPAT_VERSION}"
+      CMAKE_C_FLAGS CMAKE_CXX_FLAGS)
+  endif()
 
   if (NOT LLVM_ENABLE_TIMESTAMPS AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     # clang-cl and cl by default produce non-deterministic binaries because
@@ -501,7 +473,7 @@ elseif( LLVM_COMPILER_IS_GCC_COMPATIBLE )
   endif()
   if (LLVM_ENABLE_MODULES)
     set(OLD_CMAKE_REQUIRED_FLAGS ${CMAKE_REQUIRED_FLAGS})
-    set(CMAKE_REQUIRED_FLAGS "${CMAKE_REQUIRED_FLAGS} -fmodules")
+    set(CMAKE_REQUIRED_FLAGS "${CMAKE_REQUIRED_FLAGS} -fmodules -Xclang -fmodules-local-submodule-visibility -fmodules-cache-path=module.cache")
     # Check that we can build code with modules enabled, and that repeatedly
     # including <cassert> still manages to respect NDEBUG properly.
     CHECK_CXX_SOURCE_COMPILES("#undef NDEBUG
@@ -512,8 +484,7 @@ elseif( LLVM_COMPILER_IS_GCC_COMPATIBLE )
                                CXX_SUPPORTS_MODULES)
     set(CMAKE_REQUIRED_FLAGS ${OLD_CMAKE_REQUIRED_FLAGS})
     if (CXX_SUPPORTS_MODULES)
-      append_if(CXX_SUPPORTS_MODULES "-fmodules" CMAKE_C_FLAGS)
-      append_if(CXX_SUPPORTS_MODULES "-fmodules -fcxx-modules" CMAKE_CXX_FLAGS)
+      append_if(CXX_SUPPORTS_MODULES "-fmodules -Xclang -fmodules-local-submodule-visibility -fmodules-cache-path=module.cache" CMAKE_CXX_FLAGS)
     else()
       message(FATAL_ERROR "LLVM_ENABLE_MODULES is not supported by this compiler")
     endif()
@@ -655,6 +626,19 @@ append_if(LLVM_BUILD_INSTRUMENTED "-fprofile-instr-generate"
   CMAKE_C_FLAGS
   CMAKE_EXE_LINKER_FLAGS
   CMAKE_SHARED_LINKER_FLAGS)
+
+set(LLVM_ENABLE_LTO OFF CACHE STRING "Build LLVM with LTO. May be specified as Thin or Full to use a particular kind of LTO")
+string(TOUPPER "${LLVM_ENABLE_LTO}" uppercase_LLVM_ENABLE_LTO)
+if(uppercase_LLVM_ENABLE_LTO STREQUAL "THIN")
+  append("-flto=thin" CMAKE_CXX_FLAGS CMAKE_C_FLAGS
+                      CMAKE_EXE_LINKER_FLAGS CMAKE_SHARED_LINKER_FLAGS)
+elseif(uppercase_LLVM_ENABLE_LTO STREQUAL "FULL")
+  append("-flto=full" CMAKE_CXX_FLAGS CMAKE_C_FLAGS
+                 CMAKE_EXE_LINKER_FLAGS CMAKE_SHARED_LINKER_FLAGS)
+elseif(LLVM_ENABLE_LTO)
+  append("-flto" CMAKE_CXX_FLAGS CMAKE_C_FLAGS
+                 CMAKE_EXE_LINKER_FLAGS CMAKE_SHARED_LINKER_FLAGS)
+endif()
 
 # Plugin support
 # FIXME: Make this configurable.

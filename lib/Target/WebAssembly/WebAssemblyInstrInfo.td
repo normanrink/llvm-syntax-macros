@@ -30,7 +30,7 @@ def SDT_WebAssemblyCallSeqEnd :
     SDCallSeqEnd<[SDTCisVT<0, iPTR>, SDTCisVT<1, iPTR>]>;
 def SDT_WebAssemblyCall0    : SDTypeProfile<0, -1, [SDTCisPtrTy<0>]>;
 def SDT_WebAssemblyCall1    : SDTypeProfile<1, -1, [SDTCisPtrTy<1>]>;
-def SDT_WebAssemblyTableswitch : SDTypeProfile<0, -1, [SDTCisPtrTy<0>]>;
+def SDT_WebAssemblyBrTable  : SDTypeProfile<0, -1, [SDTCisPtrTy<0>]>;
 def SDT_WebAssemblyArgument : SDTypeProfile<1, 1, [SDTCisVT<1, i32>]>;
 def SDT_WebAssemblyReturn   : SDTypeProfile<0, -1, []>;
 def SDT_WebAssemblyWrapper  : SDTypeProfile<1, 1, [SDTCisSameAs<0, 1>,
@@ -52,9 +52,9 @@ def WebAssemblycall0 : SDNode<"WebAssemblyISD::CALL0",
 def WebAssemblycall1 : SDNode<"WebAssemblyISD::CALL1",
                               SDT_WebAssemblyCall1,
                               [SDNPHasChain, SDNPVariadic]>;
-def WebAssemblytableswitch : SDNode<"WebAssemblyISD::TABLESWITCH",
-                                    SDT_WebAssemblyTableswitch,
-                                    [SDNPHasChain, SDNPVariadic]>;
+def WebAssemblybr_table : SDNode<"WebAssemblyISD::BR_TABLE",
+                                 SDT_WebAssemblyBrTable,
+                                 [SDNPHasChain, SDNPVariadic]>;
 def WebAssemblyargument : SDNode<"WebAssemblyISD::ARGUMENT",
                                  SDT_WebAssemblyArgument>;
 def WebAssemblyreturn   : SDNode<"WebAssemblyISD::RETURN",
@@ -71,10 +71,11 @@ let OperandNamespace = "WebAssembly" in {
 let OperandType = "OPERAND_BASIC_BLOCK" in
 def bb_op : Operand<OtherVT>;
 
-let OperandType = "OPERAND_FPIMM" in {
+let OperandType = "OPERAND_FP32IMM" in
 def f32imm_op : Operand<f32>;
+
+let OperandType = "OPERAND_FP64IMM" in
 def f64imm_op : Operand<f64>;
-} // OperandType = "OPERAND_FPIMM"
 
 let OperandType = "OPERAND_P2ALIGN" in {
 def P2Align : Operand<i32> {

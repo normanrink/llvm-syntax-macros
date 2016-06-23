@@ -24,12 +24,12 @@ add_llvm_target(PowerPCCodeGen
   PPCEarlyReturn.cpp
   PPCFastISel.cpp
   PPCFrameLowering.cpp
-  PPCLoopDataPrefetch.cpp
   PPCLoopPreIncPrep.cpp
   PPCMCInstLower.cpp
   PPCMachineFunctionInfo.cpp
   PPCMIPeephole.cpp
   PPCRegisterInfo.cpp
+  PPCQPXLoadSplat.cpp
   PPCSubtarget.cpp
   PPCTargetMachine.cpp
   PPCTargetObjectFile.cpp

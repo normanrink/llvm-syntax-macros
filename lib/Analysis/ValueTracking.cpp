@@ -18,7 +18,9 @@
 #include "llvm/Analysis/AssumptionCache.h"
 #include "llvm/Analysis/InstructionSimplify.h"
 #include "llvm/Analysis/MemoryBuiltins.h"
+#include "llvm/Analysis/Loads.h"
 #include "llvm/Analysis/LoopInfo.h"
+#include "llvm/Analysis/VectorUtils.h"
 #include "llvm/IR/CallSite.h"
 #include "llvm/IR/ConstantRange.h"
 #include "llvm/IR/Constants.h"
@@ -44,33 +46,10 @@ using namespace llvm::PatternMatch;
 
 const unsigned MaxDepth = 6;
 
-/// Enable an experimental feature to leverage information about dominating
-/// conditions to compute known bits.  The individual options below control how
-/// hard we search.  The defaults are chosen to be fairly aggressive.  If you
-/// run into compile time problems when testing, scale them back and report
-/// your findings.
-static cl::opt<bool> EnableDomConditions("value-tracking-dom-conditions",
-                                         cl::Hidden, cl::init(false));
-
-// This is expensive, so we only do it for the top level query value.
-// (TODO: evaluate cost vs profit, consider higher thresholds)
-static cl::opt<unsigned> DomConditionsMaxDepth("dom-conditions-max-depth",
-                                               cl::Hidden, cl::init(1));
-
-/// How many dominating blocks should be scanned looking for dominating
-/// conditions?
-static cl::opt<unsigned> DomConditionsMaxDomBlocks("dom-conditions-dom-blocks",
-                                                   cl::Hidden,
-                                                   cl::init(20));
-
 // Controls the number of uses of the value searched for possible
 // dominating comparisons.
 static cl::opt<unsigned> DomConditionsMaxUses("dom-conditions-max-uses",
                                               cl::Hidden, cl::init(20));
-
-// If true, don't consider only compares whose only use is a branch.
-static cl::opt<bool> DomConditionsSingleCmpUse("dom-conditions-single-cmp-use",
-                                               cl::Hidden, cl::init(false));
 
 /// Returns the bitwidth of the given scalar or pointer type (if unknown returns
 /// 0). For vector types, returns the element type's bitwidth.
@@ -202,6 +181,26 @@ bool llvm::isKnownNonNegative(Value *V, const DataLayout &DL, unsigned Depth,
   bool NonNegative, Negative;
   ComputeSignBit(V, NonNegative, Negative, DL, Depth, AC, CxtI, DT);
   return NonNegative;
+}
+
+bool llvm::isKnownPositive(Value *V, const DataLayout &DL, unsigned Depth,
+                           AssumptionCache *AC, const Instruction *CxtI,
+                           const DominatorTree *DT) {
+  if (auto *CI = dyn_cast<ConstantInt>(V))
+    return CI->getValue().isStrictlyPositive();
+  
+  // TODO: We'd doing two recursive queries here.  We should factor this such
+  // that only a single query is needed.
+  return isKnownNonNegative(V, DL, Depth, AC, CxtI, DT) &&
+    isKnownNonZero(V, DL, Depth, AC, CxtI, DT);
+}
+
+bool llvm::isKnownNegative(Value *V, const DataLayout &DL, unsigned Depth,
+                           AssumptionCache *AC, const Instruction *CxtI,
+                           const DominatorTree *DT) {
+  bool NonNegative, Negative;
+  ComputeSignBit(V, NonNegative, Negative, DL, Depth, AC, CxtI, DT);
+  return Negative;
 }
 
 static bool isKnownNonEqual(Value *V1, Value *V2, const Query &Q);
@@ -517,215 +516,6 @@ bool llvm::isValidAssumeForContext(const Instruction *I,
   return ::isValidAssumeForContext(const_cast<Instruction *>(I), CxtI, DT);
 }
 
-template<typename LHS, typename RHS>
-inline match_combine_or<CmpClass_match<LHS, RHS, ICmpInst, ICmpInst::Predicate>,
-                        CmpClass_match<RHS, LHS, ICmpInst, ICmpInst::Predicate>>
-m_c_ICmp(ICmpInst::Predicate &Pred, const LHS &L, const RHS &R) {
-  return m_CombineOr(m_ICmp(Pred, L, R), m_ICmp(Pred, R, L));
-}
-
-template<typename LHS, typename RHS>
-inline match_combine_or<BinaryOp_match<LHS, RHS, Instruction::And>,
-                        BinaryOp_match<RHS, LHS, Instruction::And>>
-m_c_And(const LHS &L, const RHS &R) {
-  return m_CombineOr(m_And(L, R), m_And(R, L));
-}
-
-template<typename LHS, typename RHS>
-inline match_combine_or<BinaryOp_match<LHS, RHS, Instruction::Or>,
-                        BinaryOp_match<RHS, LHS, Instruction::Or>>
-m_c_Or(const LHS &L, const RHS &R) {
-  return m_CombineOr(m_Or(L, R), m_Or(R, L));
-}
-
-template<typename LHS, typename RHS>
-inline match_combine_or<BinaryOp_match<LHS, RHS, Instruction::Xor>,
-                        BinaryOp_match<RHS, LHS, Instruction::Xor>>
-m_c_Xor(const LHS &L, const RHS &R) {
-  return m_CombineOr(m_Xor(L, R), m_Xor(R, L));
-}
-
-/// Compute known bits in 'V' under the assumption that the condition 'Cmp' is
-/// true (at the context instruction.)  This is mostly a utility function for
-/// the prototype dominating conditions reasoning below.
-static void computeKnownBitsFromTrueCondition(Value *V, ICmpInst *Cmp,
-                                              APInt &KnownZero,
-                                              APInt &KnownOne,
-                                              unsigned Depth, const Query &Q) {
-  Value *LHS = Cmp->getOperand(0);
-  Value *RHS = Cmp->getOperand(1);
-  // TODO: We could potentially be more aggressive here.  This would be worth
-  // evaluating.  If we can, explore commoning this code with the assume
-  // handling logic.
-  if (LHS != V && RHS != V)
-    return;
-
-  const unsigned BitWidth = KnownZero.getBitWidth();
-
-  switch (Cmp->getPredicate()) {
-  default:
-    // We know nothing from this condition
-    break;
-  // TODO: implement unsigned bound from below (known one bits)
-  // TODO: common condition check implementations with assumes
-  // TODO: implement other patterns from assume (e.g. V & B == A)
-  case ICmpInst::ICMP_SGT:
-    if (LHS == V) {
-      APInt KnownZeroTemp(BitWidth, 0), KnownOneTemp(BitWidth, 0);
-      computeKnownBits(RHS, KnownZeroTemp, KnownOneTemp, Depth + 1, Q);
-      if (KnownOneTemp.isAllOnesValue() || KnownZeroTemp.isNegative()) {
-        // We know that the sign bit is zero.
-        KnownZero |= APInt::getSignBit(BitWidth);
-      }
-    }
-    break;
-  case ICmpInst::ICMP_EQ:
-    {
-      APInt KnownZeroTemp(BitWidth, 0), KnownOneTemp(BitWidth, 0);
-      if (LHS == V)
-        computeKnownBits(RHS, KnownZeroTemp, KnownOneTemp, Depth + 1, Q);
-      else if (RHS == V)
-        computeKnownBits(LHS, KnownZeroTemp, KnownOneTemp, Depth + 1, Q);
-      else
-        llvm_unreachable("missing use?");
-      KnownZero |= KnownZeroTemp;
-      KnownOne |= KnownOneTemp;
-    }
-    break;
-  case ICmpInst::ICMP_ULE:
-    if (LHS == V) {
-      APInt KnownZeroTemp(BitWidth, 0), KnownOneTemp(BitWidth, 0);
-      computeKnownBits(RHS, KnownZeroTemp, KnownOneTemp, Depth + 1, Q);
-      // The known zero bits carry over
-      unsigned SignBits = KnownZeroTemp.countLeadingOnes();
-      KnownZero |= APInt::getHighBitsSet(BitWidth, SignBits);
-    }
-    break;
-  case ICmpInst::ICMP_ULT:
-    if (LHS == V) {
-      APInt KnownZeroTemp(BitWidth, 0), KnownOneTemp(BitWidth, 0);
-      computeKnownBits(RHS, KnownZeroTemp, KnownOneTemp, Depth + 1, Q);
-      // Whatever high bits in rhs are zero are known to be zero (if rhs is a
-      // power of 2, then one more).
-      unsigned SignBits = KnownZeroTemp.countLeadingOnes();
-      if (isKnownToBeAPowerOfTwo(RHS, false, Depth + 1, Query(Q, Cmp)))
-        SignBits++;
-      KnownZero |= APInt::getHighBitsSet(BitWidth, SignBits);
-    }
-    break;
-  };
-}
-
-/// Compute known bits in 'V' from conditions which are known to be true along
-/// all paths leading to the context instruction.  In particular, look for
-/// cases where one branch of an interesting condition dominates the context
-/// instruction.  This does not do general dataflow.
-/// NOTE: This code is EXPERIMENTAL and currently off by default.
-static void computeKnownBitsFromDominatingCondition(Value *V, APInt &KnownZero,
-                                                    APInt &KnownOne,
-                                                    unsigned Depth,
-                                                    const Query &Q) {
-  // Need both the dominator tree and the query location to do anything useful
-  if (!Q.DT || !Q.CxtI)
-    return;
-  Instruction *Cxt = const_cast<Instruction *>(Q.CxtI);
-  // The context instruction might be in a statically unreachable block.  If
-  // so, asking dominator queries may yield suprising results.  (e.g. the block
-  // may not have a dom tree node)
-  if (!Q.DT->isReachableFromEntry(Cxt->getParent()))
-    return;
-
-  // Avoid useless work
-  if (auto VI = dyn_cast<Instruction>(V))
-    if (VI->getParent() == Cxt->getParent())
-      return;
-
-  // Note: We currently implement two options.  It's not clear which of these
-  // will survive long term, we need data for that.
-  // Option 1 - Try walking the dominator tree looking for conditions which
-  // might apply.  This works well for local conditions (loop guards, etc..),
-  // but not as well for things far from the context instruction (presuming a
-  // low max blocks explored).  If we can set an high enough limit, this would
-  // be all we need.
-  // Option 2 - We restrict out search to those conditions which are uses of
-  // the value we're interested in.  This is independent of dom structure,
-  // but is slightly less powerful without looking through lots of use chains.
-  // It does handle conditions far from the context instruction (e.g. early
-  // function exits on entry) really well though.
-
-  // Option 1 - Search the dom tree
-  unsigned NumBlocksExplored = 0;
-  BasicBlock *Current = Cxt->getParent();
-  while (true) {
-    // Stop searching if we've gone too far up the chain
-    if (NumBlocksExplored >= DomConditionsMaxDomBlocks)
-      break;
-    NumBlocksExplored++;
-
-    if (!Q.DT->getNode(Current)->getIDom())
-      break;
-    Current = Q.DT->getNode(Current)->getIDom()->getBlock();
-    if (!Current)
-      // found function entry
-      break;
-
-    BranchInst *BI = dyn_cast<BranchInst>(Current->getTerminator());
-    if (!BI || BI->isUnconditional())
-      continue;
-    ICmpInst *Cmp = dyn_cast<ICmpInst>(BI->getCondition());
-    if (!Cmp)
-      continue;
-
-    // We're looking for conditions that are guaranteed to hold at the context
-    // instruction.  Finding a condition where one path dominates the context
-    // isn't enough because both the true and false cases could merge before
-    // the context instruction we're actually interested in.  Instead, we need
-    // to ensure that the taken *edge* dominates the context instruction.  We
-    // know that the edge must be reachable since we started from a reachable
-    // block.
-    BasicBlock *BB0 = BI->getSuccessor(0);
-    BasicBlockEdge Edge(BI->getParent(), BB0);
-    if (!Edge.isSingleEdge() || !Q.DT->dominates(Edge, Q.CxtI->getParent()))
-      continue;
-
-    computeKnownBitsFromTrueCondition(V, Cmp, KnownZero, KnownOne, Depth, Q);
-  }
-
-  // Option 2 - Search the other uses of V
-  unsigned NumUsesExplored = 0;
-  for (auto U : V->users()) {
-    // Avoid massive lists
-    if (NumUsesExplored >= DomConditionsMaxUses)
-      break;
-    NumUsesExplored++;
-    // Consider only compare instructions uniquely controlling a branch
-    ICmpInst *Cmp = dyn_cast<ICmpInst>(U);
-    if (!Cmp)
-      continue;
-
-    if (DomConditionsSingleCmpUse && !Cmp->hasOneUse())
-      continue;
-
-    for (auto *CmpU : Cmp->users()) {
-      BranchInst *BI = dyn_cast<BranchInst>(CmpU);
-      if (!BI || BI->isUnconditional())
-        continue;
-      // We're looking for conditions that are guaranteed to hold at the
-      // context instruction.  Finding a condition where one path dominates
-      // the context isn't enough because both the true and false cases could
-      // merge before the context instruction we're actually interested in.
-      // Instead, we need to ensure that the taken *edge* dominates the context
-      // instruction. 
-      BasicBlock *BB0 = BI->getSuccessor(0);
-      BasicBlockEdge Edge(BI->getParent(), BB0);
-      if (!Edge.isSingleEdge() || !Q.DT->dominates(Edge, Q.CxtI->getParent()))
-        continue;
-
-      computeKnownBitsFromTrueCondition(V, Cmp, KnownZero, KnownOne, Depth, Q);
-    }
-  }
-}
-
 static void computeKnownBitsFromAssume(Value *V, APInt &KnownZero,
                                        APInt &KnownOne, unsigned Depth,
                                        const Query &Q) {
@@ -1024,7 +814,8 @@ static void computeKnownBitsFromShiftOperator(Operator *I,
 
   // It would be more-clearly correct to use the two temporaries for this
   // calculation. Reusing the APInts here to prevent unnecessary allocations.
-  KnownZero.clearAllBits(), KnownOne.clearAllBits();
+  KnownZero.clearAllBits();
+  KnownOne.clearAllBits();
 
   // If we know the shifter operand is nonzero, we can sometimes infer more
   // known bits. However this is expensive to compute, so be lazy about it and
@@ -1069,8 +860,10 @@ static void computeKnownBitsFromShiftOperator(Operator *I,
   // return anything we'd like, but we need to make sure the sets of known bits
   // stay disjoint (it should be better for some other code to actually
   // propagate the undef than to pick a value here using known bits).
-  if ((KnownZero & KnownOne) != 0)
-    KnownZero.clearAllBits(), KnownOne.clearAllBits();
+  if ((KnownZero & KnownOne) != 0) {
+    KnownZero.clearAllBits();
+    KnownOne.clearAllBits();
+  }
 }
 
 static void computeKnownBitsFromOperator(Operator *I, APInt &KnownZero,
@@ -1566,46 +1359,6 @@ static void computeKnownBitsFromOperator(Operator *I, APInt &KnownZero,
   }
 }
 
-static unsigned getAlignment(const Value *V, const DataLayout &DL) {
-  unsigned Align = 0;
-  if (auto *GO = dyn_cast<GlobalObject>(V)) {
-    Align = GO->getAlignment();
-    if (Align == 0) {
-      if (auto *GVar = dyn_cast<GlobalVariable>(GO)) {
-        Type *ObjectType = GVar->getValueType();
-        if (ObjectType->isSized()) {
-          // If the object is defined in the current Module, we'll be giving
-          // it the preferred alignment. Otherwise, we have to assume that it
-          // may only have the minimum ABI alignment.
-          if (GVar->isStrongDefinitionForLinker())
-            Align = DL.getPreferredAlignment(GVar);
-          else
-            Align = DL.getABITypeAlignment(ObjectType);
-        }
-      }
-    }
-  } else if (const Argument *A = dyn_cast<Argument>(V)) {
-    Align = A->getType()->isPointerTy() ? A->getParamAlignment() : 0;
-
-    if (!Align && A->hasStructRetAttr()) {
-      // An sret parameter has at least the ABI alignment of the return type.
-      Type *EltTy = cast<PointerType>(A->getType())->getElementType();
-      if (EltTy->isSized())
-        Align = DL.getABITypeAlignment(EltTy);
-    }
-  } else if (const AllocaInst *AI = dyn_cast<AllocaInst>(V))
-    Align = AI->getAlignment();
-  else if (auto CS = ImmutableCallSite(V))
-    Align = CS.getAttributes().getParamAlignment(AttributeSet::ReturnIndex);
-  else if (const LoadInst *LI = dyn_cast<LoadInst>(V))
-    if (MDNode *MD = LI->getMetadata(LLVMContext::MD_align)) {
-      ConstantInt *CI = mdconst::extract<ConstantInt>(MD->getOperand(0));
-      Align = CI->getLimitedValue();
-    }
-
-  return Align;
-}
-
 /// Determine which bits of V are known to be either zero or one and return
 /// them in the KnownZero/KnownOne bit sets.
 ///
@@ -1678,7 +1431,7 @@ void computeKnownBits(Value *V, APInt &KnownZero, APInt &KnownOne,
   // A weak GlobalAlias is totally unknown. A non-weak GlobalAlias has
   // the bits of its aliasee.
   if (GlobalAlias *GA = dyn_cast<GlobalAlias>(V)) {
-    if (!GA->mayBeOverridden())
+    if (!GA->isInterposable())
       computeKnownBits(GA->getAliasee(), KnownZero, KnownOne, Depth + 1, Q);
     return;
   }
@@ -1688,22 +1441,16 @@ void computeKnownBits(Value *V, APInt &KnownZero, APInt &KnownOne,
 
   // Aligned pointers have trailing zeros - refine KnownZero set
   if (V->getType()->isPointerTy()) {
-    unsigned Align = getAlignment(V, Q.DL);
+    unsigned Align = V->getPointerAlignment(Q.DL);
     if (Align)
       KnownZero |= APInt::getLowBitsSet(BitWidth, countTrailingZeros(Align));
   }
 
-  // computeKnownBitsFromAssume and computeKnownBitsFromDominatingCondition
-  // strictly refines KnownZero and KnownOne. Therefore, we run them after
-  // computeKnownBitsFromOperator.
+  // computeKnownBitsFromAssume strictly refines KnownZero and
+  // KnownOne. Therefore, we run them after computeKnownBitsFromOperator.
 
   // Check whether a nearby assume intrinsic can determine some known bits.
   computeKnownBitsFromAssume(V, KnownZero, KnownOne, Depth, Q);
-
-  // Check whether there's a dominating condition which implies something about
-  // this value at the given context.
-  if (EnableDomConditions && Depth <= DomConditionsMaxDepth)
-    computeKnownBitsFromDominatingCondition(V, KnownZero, KnownOne, Depth, Q);
 
   assert((KnownZero & KnownOne) == 0 && "Bits known to be one AND zero?");
 }
@@ -2074,6 +1821,12 @@ bool isKnownNonZero(Value *V, unsigned Depth, const Query &Q) {
         }
       }
     }
+    // Check if all incoming values are non-zero constant.
+    bool AllNonZeroConstants = all_of(PN->operands(), [](Value *V) {
+      return isa<ConstantInt>(V) && !cast<ConstantInt>(V)->isZeroValue();
+    });
+    if (AllNonZeroConstants)
+      return true;
   }
 
   if (!BitWidth) return false;
@@ -2489,13 +2242,161 @@ bool llvm::ComputeMultiple(Value *V, unsigned Base, Value *&Multiple,
   return false;
 }
 
+/// \brief Check call has a unary float signature
+/// It checks following:
+/// a) call should have a single argument
+/// b) argument type should be floating point type
+/// c) call instruction type and argument type should be same
+/// d) call should only reads memory.
+/// If all these condition is met then return ValidIntrinsicID
+/// else return not_intrinsic.
+static Intrinsic::ID checkUnaryFloatSignature(ImmutableCallSite ICS,
+                                              Intrinsic::ID ValidIntrinsicID) {
+  if (ICS.getNumArgOperands() != 1 ||
+      !ICS.getArgOperand(0)->getType()->isFloatingPointTy() ||
+      ICS.getType() != ICS.getArgOperand(0)->getType() ||
+      !ICS.onlyReadsMemory())
+    return Intrinsic::not_intrinsic;
+
+  return ValidIntrinsicID;
+}
+
+/// \brief Check call has a binary float signature
+/// It checks following:
+/// a) call should have 2 arguments.
+/// b) arguments type should be floating point type
+/// c) call instruction type and arguments type should be same
+/// d) call should only reads memory.
+/// If all these condition is met then return ValidIntrinsicID
+/// else return not_intrinsic.
+static Intrinsic::ID checkBinaryFloatSignature(ImmutableCallSite ICS,
+                                               Intrinsic::ID ValidIntrinsicID) {
+  if (ICS.getNumArgOperands() != 2 ||
+      !ICS.getArgOperand(0)->getType()->isFloatingPointTy() ||
+      !ICS.getArgOperand(1)->getType()->isFloatingPointTy() ||
+      ICS.getType() != ICS.getArgOperand(0)->getType() ||
+      ICS.getType() != ICS.getArgOperand(1)->getType() ||
+      !ICS.onlyReadsMemory())
+    return Intrinsic::not_intrinsic;
+
+  return ValidIntrinsicID;
+}
+
+Intrinsic::ID llvm::getIntrinsicForCallSite(ImmutableCallSite ICS,
+                                            const TargetLibraryInfo *TLI) {
+  const Function *F = ICS.getCalledFunction();
+  if (!F)
+    return Intrinsic::not_intrinsic;
+
+  if (F->isIntrinsic())
+    return F->getIntrinsicID();
+
+  if (!TLI)
+    return Intrinsic::not_intrinsic;
+
+  LibFunc::Func Func;
+  // We're going to make assumptions on the semantics of the functions, check
+  // that the target knows that it's available in this environment and it does
+  // not have local linkage.
+  if (!F || F->hasLocalLinkage() || !TLI->getLibFunc(F->getName(), Func))
+    return Intrinsic::not_intrinsic;
+
+  // Otherwise check if we have a call to a function that can be turned into a
+  // vector intrinsic.
+  switch (Func) {
+  default:
+    break;
+  case LibFunc::sin:
+  case LibFunc::sinf:
+  case LibFunc::sinl:
+    return checkUnaryFloatSignature(ICS, Intrinsic::sin);
+  case LibFunc::cos:
+  case LibFunc::cosf:
+  case LibFunc::cosl:
+    return checkUnaryFloatSignature(ICS, Intrinsic::cos);
+  case LibFunc::exp:
+  case LibFunc::expf:
+  case LibFunc::expl:
+    return checkUnaryFloatSignature(ICS, Intrinsic::exp);
+  case LibFunc::exp2:
+  case LibFunc::exp2f:
+  case LibFunc::exp2l:
+    return checkUnaryFloatSignature(ICS, Intrinsic::exp2);
+  case LibFunc::log:
+  case LibFunc::logf:
+  case LibFunc::logl:
+    return checkUnaryFloatSignature(ICS, Intrinsic::log);
+  case LibFunc::log10:
+  case LibFunc::log10f:
+  case LibFunc::log10l:
+    return checkUnaryFloatSignature(ICS, Intrinsic::log10);
+  case LibFunc::log2:
+  case LibFunc::log2f:
+  case LibFunc::log2l:
+    return checkUnaryFloatSignature(ICS, Intrinsic::log2);
+  case LibFunc::fabs:
+  case LibFunc::fabsf:
+  case LibFunc::fabsl:
+    return checkUnaryFloatSignature(ICS, Intrinsic::fabs);
+  case LibFunc::fmin:
+  case LibFunc::fminf:
+  case LibFunc::fminl:
+    return checkBinaryFloatSignature(ICS, Intrinsic::minnum);
+  case LibFunc::fmax:
+  case LibFunc::fmaxf:
+  case LibFunc::fmaxl:
+    return checkBinaryFloatSignature(ICS, Intrinsic::maxnum);
+  case LibFunc::copysign:
+  case LibFunc::copysignf:
+  case LibFunc::copysignl:
+    return checkBinaryFloatSignature(ICS, Intrinsic::copysign);
+  case LibFunc::floor:
+  case LibFunc::floorf:
+  case LibFunc::floorl:
+    return checkUnaryFloatSignature(ICS, Intrinsic::floor);
+  case LibFunc::ceil:
+  case LibFunc::ceilf:
+  case LibFunc::ceill:
+    return checkUnaryFloatSignature(ICS, Intrinsic::ceil);
+  case LibFunc::trunc:
+  case LibFunc::truncf:
+  case LibFunc::truncl:
+    return checkUnaryFloatSignature(ICS, Intrinsic::trunc);
+  case LibFunc::rint:
+  case LibFunc::rintf:
+  case LibFunc::rintl:
+    return checkUnaryFloatSignature(ICS, Intrinsic::rint);
+  case LibFunc::nearbyint:
+  case LibFunc::nearbyintf:
+  case LibFunc::nearbyintl:
+    return checkUnaryFloatSignature(ICS, Intrinsic::nearbyint);
+  case LibFunc::round:
+  case LibFunc::roundf:
+  case LibFunc::roundl:
+    return checkUnaryFloatSignature(ICS, Intrinsic::round);
+  case LibFunc::pow:
+  case LibFunc::powf:
+  case LibFunc::powl:
+    return checkBinaryFloatSignature(ICS, Intrinsic::pow);
+  case LibFunc::sqrt:
+  case LibFunc::sqrtf:
+  case LibFunc::sqrtl:
+    if (ICS->hasNoNaNs())
+      return checkUnaryFloatSignature(ICS, Intrinsic::sqrt);
+    return Intrinsic::not_intrinsic;
+  }
+
+  return Intrinsic::not_intrinsic;
+}
+
 /// Return true if we can prove that the specified FP value is never equal to
 /// -0.0.
 ///
 /// NOTE: this function will need to be revisited when we support non-default
 /// rounding modes!
 ///
-bool llvm::CannotBeNegativeZero(const Value *V, unsigned Depth) {
+bool llvm::CannotBeNegativeZero(const Value *V, const TargetLibraryInfo *TLI,
+                                unsigned Depth) {
   if (const ConstantFP *CFP = dyn_cast<ConstantFP>(V))
     return !CFP->getValueAPF().isNegZero();
 
@@ -2523,30 +2424,26 @@ bool llvm::CannotBeNegativeZero(const Value *V, unsigned Depth) {
   if (isa<SIToFPInst>(I) || isa<UIToFPInst>(I))
     return true;
 
-  if (const IntrinsicInst *II = dyn_cast<IntrinsicInst>(I))
+  if (const CallInst *CI = dyn_cast<CallInst>(I)) {
+    Intrinsic::ID IID = getIntrinsicForCallSite(CI, TLI);
+    switch (IID) {
+    default:
+      break;
     // sqrt(-0.0) = -0.0, no other negative results are possible.
-    if (II->getIntrinsicID() == Intrinsic::sqrt)
-      return CannotBeNegativeZero(II->getArgOperand(0), Depth+1);
-
-  if (const CallInst *CI = dyn_cast<CallInst>(I))
-    if (const Function *F = CI->getCalledFunction()) {
-      if (F->isDeclaration()) {
-        // abs(x) != -0.0
-        if (F->getName() == "abs") return true;
-        // fabs[lf](x) != -0.0
-        if (F->getName() == "fabs") return true;
-        if (F->getName() == "fabsf") return true;
-        if (F->getName() == "fabsl") return true;
-        if (F->getName() == "sqrt" || F->getName() == "sqrtf" ||
-            F->getName() == "sqrtl")
-          return CannotBeNegativeZero(CI->getArgOperand(0), Depth+1);
-      }
+    case Intrinsic::sqrt:
+      return CannotBeNegativeZero(CI->getArgOperand(0), TLI, Depth + 1);
+    // fabs(x) != -0.0
+    case Intrinsic::fabs:
+      return true;
     }
+  }
 
   return false;
 }
 
-bool llvm::CannotBeOrderedLessThanZero(const Value *V, unsigned Depth) {
+bool llvm::CannotBeOrderedLessThanZero(const Value *V,
+                                       const TargetLibraryInfo *TLI,
+                                       unsigned Depth) {
   if (const ConstantFP *CFP = dyn_cast<ConstantFP>(V))
     return !CFP->getValueAPF().isNegative() || CFP->getValueAPF().isZero();
 
@@ -2572,43 +2469,44 @@ bool llvm::CannotBeOrderedLessThanZero(const Value *V, unsigned Depth) {
   case Instruction::FAdd:
   case Instruction::FDiv:
   case Instruction::FRem:
-    return CannotBeOrderedLessThanZero(I->getOperand(0), Depth+1) &&
-           CannotBeOrderedLessThanZero(I->getOperand(1), Depth+1);
+    return CannotBeOrderedLessThanZero(I->getOperand(0), TLI, Depth + 1) &&
+           CannotBeOrderedLessThanZero(I->getOperand(1), TLI, Depth + 1);
   case Instruction::Select:
-    return CannotBeOrderedLessThanZero(I->getOperand(1), Depth+1) &&
-           CannotBeOrderedLessThanZero(I->getOperand(2), Depth+1);
+    return CannotBeOrderedLessThanZero(I->getOperand(1), TLI, Depth + 1) &&
+           CannotBeOrderedLessThanZero(I->getOperand(2), TLI, Depth + 1);
   case Instruction::FPExt:
   case Instruction::FPTrunc:
     // Widening/narrowing never change sign.
-    return CannotBeOrderedLessThanZero(I->getOperand(0), Depth+1);
-  case Instruction::Call: 
-    if (const IntrinsicInst *II = dyn_cast<IntrinsicInst>(I)) 
-      switch (II->getIntrinsicID()) {
-      default: break;
-      case Intrinsic::maxnum:
-        return CannotBeOrderedLessThanZero(I->getOperand(0), Depth+1) ||
-               CannotBeOrderedLessThanZero(I->getOperand(1), Depth+1);
-      case Intrinsic::minnum:
-        return CannotBeOrderedLessThanZero(I->getOperand(0), Depth+1) &&
-               CannotBeOrderedLessThanZero(I->getOperand(1), Depth+1);
-      case Intrinsic::exp:
-      case Intrinsic::exp2:
-      case Intrinsic::fabs:
-      case Intrinsic::sqrt:
-        return true;
-      case Intrinsic::powi: 
-        if (ConstantInt *CI = dyn_cast<ConstantInt>(I->getOperand(1))) {
-          // powi(x,n) is non-negative if n is even.
-          if (CI->getBitWidth() <= 64 && CI->getSExtValue() % 2u == 0)
-            return true;
-        }
-        return CannotBeOrderedLessThanZero(I->getOperand(0), Depth+1);
-      case Intrinsic::fma:
-      case Intrinsic::fmuladd:
-        // x*x+y is non-negative if y is non-negative.
-        return I->getOperand(0) == I->getOperand(1) && 
-               CannotBeOrderedLessThanZero(I->getOperand(2), Depth+1);
+    return CannotBeOrderedLessThanZero(I->getOperand(0), TLI, Depth + 1);
+  case Instruction::Call:
+    Intrinsic::ID IID = getIntrinsicForCallSite(cast<CallInst>(I), TLI);
+    switch (IID) {
+    default:
+      break;
+    case Intrinsic::maxnum:
+      return CannotBeOrderedLessThanZero(I->getOperand(0), TLI, Depth + 1) ||
+             CannotBeOrderedLessThanZero(I->getOperand(1), TLI, Depth + 1);
+    case Intrinsic::minnum:
+      return CannotBeOrderedLessThanZero(I->getOperand(0), TLI, Depth + 1) &&
+             CannotBeOrderedLessThanZero(I->getOperand(1), TLI, Depth + 1);
+    case Intrinsic::exp:
+    case Intrinsic::exp2:
+    case Intrinsic::fabs:
+    case Intrinsic::sqrt:
+      return true;
+    case Intrinsic::powi:
+      if (ConstantInt *CI = dyn_cast<ConstantInt>(I->getOperand(1))) {
+        // powi(x,n) is non-negative if n is even.
+        if (CI->getBitWidth() <= 64 && CI->getSExtValue() % 2u == 0)
+          return true;
       }
+      return CannotBeOrderedLessThanZero(I->getOperand(0), TLI, Depth + 1);
+    case Intrinsic::fma:
+    case Intrinsic::fmuladd:
+      // x*x+y is non-negative if y is non-negative.
+      return I->getOperand(0) == I->getOperand(1) &&
+             CannotBeOrderedLessThanZero(I->getOperand(2), TLI, Depth + 1);
+    }
     break;
   }
   return false; 
@@ -2868,7 +2766,7 @@ Value *llvm::GetPointerBaseWithConstantOffset(Value *Ptr, int64_t &Offset,
                Operator::getOpcode(Ptr) == Instruction::AddrSpaceCast) {
       Ptr = cast<Operator>(Ptr)->getOperand(0);
     } else if (GlobalAlias *GA = dyn_cast<GlobalAlias>(Ptr)) {
-      if (GA->mayBeOverridden())
+      if (GA->isInterposable())
         break;
       Ptr = GA->getAliasee();
     } else {
@@ -2879,6 +2777,24 @@ Value *llvm::GetPointerBaseWithConstantOffset(Value *Ptr, int64_t &Offset,
   return Ptr;
 }
 
+bool llvm::isGEPBasedOnPointerToString(const GEPOperator *GEP) {
+  // Make sure the GEP has exactly three arguments.
+  if (GEP->getNumOperands() != 3)
+    return false;
+
+  // Make sure the index-ee is a pointer to array of i8.
+  ArrayType *AT = dyn_cast<ArrayType>(GEP->getSourceElementType());
+  if (!AT || !AT->getElementType()->isIntegerTy(8))
+    return false;
+
+  // Check to make sure that the first operand of the GEP is an integer and
+  // has value 0 so that we are sure we're indexing into the initializer.
+  const ConstantInt *FirstIdx = dyn_cast<ConstantInt>(GEP->getOperand(1));
+  if (!FirstIdx || !FirstIdx->isZero())
+    return false;
+
+  return true;
+} 
 
 /// This function computes the length of a null-terminated C string pointed to
 /// by V. If successful, it returns true and returns the string in Str.
@@ -2893,19 +2809,9 @@ bool llvm::getConstantStringInfo(const Value *V, StringRef &Str,
   // If the value is a GEP instruction or constant expression, treat it as an
   // offset.
   if (const GEPOperator *GEP = dyn_cast<GEPOperator>(V)) {
-    // Make sure the GEP has exactly three arguments.
-    if (GEP->getNumOperands() != 3)
-      return false;
-
-    // Make sure the index-ee is a pointer to array of i8.
-    ArrayType *AT = dyn_cast<ArrayType>(GEP->getSourceElementType());
-    if (!AT || !AT->getElementType()->isIntegerTy(8))
-      return false;
-
-    // Check to make sure that the first operand of the GEP is an integer and
-    // has value 0 so that we are sure we're indexing into the initializer.
-    const ConstantInt *FirstIdx = dyn_cast<ConstantInt>(GEP->getOperand(1));
-    if (!FirstIdx || !FirstIdx->isZero())
+    // The GEP operator should be based on a pointer to string constant, and is
+    // indexing into the string constant.
+    if (!isGEPBasedOnPointerToString(GEP))
       return false;
 
     // If the second index isn't a ConstantInt, then this is a variable index
@@ -3064,7 +2970,7 @@ Value *llvm::GetUnderlyingObject(Value *V, const DataLayout &DL,
                Operator::getOpcode(V) == Instruction::AddrSpaceCast) {
       V = cast<Operator>(V)->getOperand(0);
     } else if (GlobalAlias *GA = dyn_cast<GlobalAlias>(V)) {
-      if (GA->mayBeOverridden())
+      if (GA->isInterposable())
         return V;
       V = GA->getAliasee();
     } else {
@@ -3135,208 +3041,6 @@ bool llvm::onlyUsedByLifetimeMarkers(const Value *V) {
       return false;
   }
   return true;
-}
-
-static bool isDereferenceableFromAttribute(const Value *BV, APInt Offset,
-                                           Type *Ty, const DataLayout &DL,
-                                           const Instruction *CtxI,
-                                           const DominatorTree *DT,
-                                           const TargetLibraryInfo *TLI) {
-  assert(Offset.isNonNegative() && "offset can't be negative");
-  assert(Ty->isSized() && "must be sized");
-  
-  APInt DerefBytes(Offset.getBitWidth(), 0);
-  bool CheckForNonNull = false;
-  if (const Argument *A = dyn_cast<Argument>(BV)) {
-    DerefBytes = A->getDereferenceableBytes();
-    if (!DerefBytes.getBoolValue()) {
-      DerefBytes = A->getDereferenceableOrNullBytes();
-      CheckForNonNull = true;
-    }
-  } else if (auto CS = ImmutableCallSite(BV)) {
-    DerefBytes = CS.getDereferenceableBytes(0);
-    if (!DerefBytes.getBoolValue()) {
-      DerefBytes = CS.getDereferenceableOrNullBytes(0);
-      CheckForNonNull = true;
-    }
-  } else if (const LoadInst *LI = dyn_cast<LoadInst>(BV)) {
-    if (MDNode *MD = LI->getMetadata(LLVMContext::MD_dereferenceable)) {
-      ConstantInt *CI = mdconst::extract<ConstantInt>(MD->getOperand(0));
-      DerefBytes = CI->getLimitedValue();
-    }
-    if (!DerefBytes.getBoolValue()) {
-      if (MDNode *MD = 
-              LI->getMetadata(LLVMContext::MD_dereferenceable_or_null)) {
-        ConstantInt *CI = mdconst::extract<ConstantInt>(MD->getOperand(0));
-        DerefBytes = CI->getLimitedValue();
-      }
-      CheckForNonNull = true;
-    }
-  }
-  
-  if (DerefBytes.getBoolValue())
-    if (DerefBytes.uge(Offset + DL.getTypeStoreSize(Ty)))
-      if (!CheckForNonNull || isKnownNonNullAt(BV, CtxI, DT, TLI))
-        return true;
-
-  return false;
-}
-
-static bool isDereferenceableFromAttribute(const Value *V, const DataLayout &DL,
-                                           const Instruction *CtxI,
-                                           const DominatorTree *DT,
-                                           const TargetLibraryInfo *TLI) {
-  Type *VTy = V->getType();
-  Type *Ty = VTy->getPointerElementType();
-  if (!Ty->isSized())
-    return false;
-  
-  APInt Offset(DL.getTypeStoreSizeInBits(VTy), 0);
-  return isDereferenceableFromAttribute(V, Offset, Ty, DL, CtxI, DT, TLI);
-}
-
-static bool isAligned(const Value *Base, APInt Offset, unsigned Align,
-                      const DataLayout &DL) {
-  APInt BaseAlign(Offset.getBitWidth(), getAlignment(Base, DL));
-
-  if (!BaseAlign) {
-    Type *Ty = Base->getType()->getPointerElementType();
-    if (!Ty->isSized())
-      return false;
-    BaseAlign = DL.getABITypeAlignment(Ty);
-  }
-
-  APInt Alignment(Offset.getBitWidth(), Align);
-
-  assert(Alignment.isPowerOf2() && "must be a power of 2!");
-  return BaseAlign.uge(Alignment) && !(Offset & (Alignment-1));
-}
-
-static bool isAligned(const Value *Base, unsigned Align, const DataLayout &DL) {
-  Type *Ty = Base->getType();
-  assert(Ty->isSized() && "must be sized");
-  APInt Offset(DL.getTypeStoreSizeInBits(Ty), 0);
-  return isAligned(Base, Offset, Align, DL);
-}
-
-/// Test if V is always a pointer to allocated and suitably aligned memory for
-/// a simple load or store.
-static bool isDereferenceableAndAlignedPointer(
-    const Value *V, unsigned Align, const DataLayout &DL,
-    const Instruction *CtxI, const DominatorTree *DT,
-    const TargetLibraryInfo *TLI, SmallPtrSetImpl<const Value *> &Visited) {
-  // Note that it is not safe to speculate into a malloc'd region because
-  // malloc may return null.
-
-  // These are obviously ok if aligned.
-  if (isa<AllocaInst>(V))
-    return isAligned(V, Align, DL);
-
-  // It's not always safe to follow a bitcast, for example:
-  //   bitcast i8* (alloca i8) to i32*
-  // would result in a 4-byte load from a 1-byte alloca. However,
-  // if we're casting from a pointer from a type of larger size
-  // to a type of smaller size (or the same size), and the alignment
-  // is at least as large as for the resulting pointer type, then
-  // we can look through the bitcast.
-  if (const BitCastOperator *BC = dyn_cast<BitCastOperator>(V)) {
-    Type *STy = BC->getSrcTy()->getPointerElementType(),
-         *DTy = BC->getDestTy()->getPointerElementType();
-    if (STy->isSized() && DTy->isSized() &&
-        (DL.getTypeStoreSize(STy) >= DL.getTypeStoreSize(DTy)) &&
-        (DL.getABITypeAlignment(STy) >= DL.getABITypeAlignment(DTy)))
-      return isDereferenceableAndAlignedPointer(BC->getOperand(0), Align, DL,
-                                                CtxI, DT, TLI, Visited);
-  }
-
-  // Global variables which can't collapse to null are ok.
-  if (const GlobalVariable *GV = dyn_cast<GlobalVariable>(V))
-    if (!GV->hasExternalWeakLinkage())
-      return isAligned(V, Align, DL);
-
-  // byval arguments are okay.
-  if (const Argument *A = dyn_cast<Argument>(V))
-    if (A->hasByValAttr())
-      return isAligned(V, Align, DL);
-
-  if (isDereferenceableFromAttribute(V, DL, CtxI, DT, TLI))
-    return isAligned(V, Align, DL);
-
-  // For GEPs, determine if the indexing lands within the allocated object.
-  if (const GEPOperator *GEP = dyn_cast<GEPOperator>(V)) {
-    Type *Ty = GEP->getResultElementType();
-    const Value *Base = GEP->getPointerOperand();
-
-    // Conservatively require that the base pointer be fully dereferenceable
-    // and aligned.
-    if (!Visited.insert(Base).second)
-      return false;
-    if (!isDereferenceableAndAlignedPointer(Base, Align, DL, CtxI, DT, TLI,
-                                            Visited))
-      return false;
-
-    APInt Offset(DL.getPointerTypeSizeInBits(GEP->getType()), 0);
-    if (!GEP->accumulateConstantOffset(DL, Offset))
-      return false;
-
-    // Check if the load is within the bounds of the underlying object
-    // and offset is aligned.
-    uint64_t LoadSize = DL.getTypeStoreSize(Ty);
-    Type *BaseType = GEP->getSourceElementType();
-    assert(isPowerOf2_32(Align) && "must be a power of 2!");
-    return (Offset + LoadSize).ule(DL.getTypeAllocSize(BaseType)) && 
-           !(Offset & APInt(Offset.getBitWidth(), Align-1));
-  }
-
-  // For gc.relocate, look through relocations
-  if (const GCRelocateInst *RelocateInst = dyn_cast<GCRelocateInst>(V))
-    return isDereferenceableAndAlignedPointer(
-        RelocateInst->getDerivedPtr(), Align, DL, CtxI, DT, TLI, Visited);
-
-  if (const AddrSpaceCastInst *ASC = dyn_cast<AddrSpaceCastInst>(V))
-    return isDereferenceableAndAlignedPointer(ASC->getOperand(0), Align, DL,
-                                              CtxI, DT, TLI, Visited);
-
-  // If we don't know, assume the worst.
-  return false;
-}
-
-bool llvm::isDereferenceableAndAlignedPointer(const Value *V, unsigned Align,
-                                              const DataLayout &DL,
-                                              const Instruction *CtxI,
-                                              const DominatorTree *DT,
-                                              const TargetLibraryInfo *TLI) {
-  // When dereferenceability information is provided by a dereferenceable
-  // attribute, we know exactly how many bytes are dereferenceable. If we can
-  // determine the exact offset to the attributed variable, we can use that
-  // information here.
-  Type *VTy = V->getType();
-  Type *Ty = VTy->getPointerElementType();
-
-  // Require ABI alignment for loads without alignment specification
-  if (Align == 0)
-    Align = DL.getABITypeAlignment(Ty);
-
-  if (Ty->isSized()) {
-    APInt Offset(DL.getTypeStoreSizeInBits(VTy), 0);
-    const Value *BV = V->stripAndAccumulateInBoundsConstantOffsets(DL, Offset);
-
-    if (Offset.isNonNegative())
-      if (isDereferenceableFromAttribute(BV, Offset, Ty, DL, CtxI, DT, TLI) &&
-          isAligned(BV, Offset, Align, DL))
-        return true;
-  }
-
-  SmallPtrSet<const Value *, 32> Visited;
-  return ::isDereferenceableAndAlignedPointer(V, Align, DL, CtxI, DT, TLI,
-                                              Visited);
-}
-
-bool llvm::isDereferenceablePointer(const Value *V, const DataLayout &DL,
-                                    const Instruction *CtxI,
-                                    const DominatorTree *DT,
-                                    const TargetLibraryInfo *TLI) {
-  return isDereferenceableAndAlignedPointer(V, 1, DL, CtxI, DT, TLI);
 }
 
 bool llvm::isSafeToSpeculativelyExecute(const Value *V,
@@ -3419,17 +3123,29 @@ bool llvm::isSafeToSpeculativelyExecute(const Value *V,
       case Intrinsic::umul_with_overflow:
       case Intrinsic::usub_with_overflow:
         return true;
-      // Sqrt should be OK, since the llvm sqrt intrinsic isn't defined to set
-      // errno like libm sqrt would.
+      // These intrinsics are defined to have the same behavior as libm
+      // functions except for setting errno.
       case Intrinsic::sqrt:
       case Intrinsic::fma:
       case Intrinsic::fmuladd:
+        return true;
+      // These intrinsics are defined to have the same behavior as libm
+      // functions, and the corresponding libm functions never set errno.
+      case Intrinsic::trunc:
+      case Intrinsic::copysign:
       case Intrinsic::fabs:
       case Intrinsic::minnum:
       case Intrinsic::maxnum:
         return true;
-      // TODO: some fp intrinsics are marked as having the same error handling
-      // as libm. They're safe to speculate when they won't error.
+      // These intrinsics are defined to have the same behavior as libm
+      // functions, which never overflow when operating on the IEEE754 types
+      // that we support, and never set errno otherwise.
+      case Intrinsic::ceil:
+      case Intrinsic::floor:
+      case Intrinsic::nearbyint:
+      case Intrinsic::rint:
+      case Intrinsic::round:
+        return true;
       // TODO: are convert_{from,to}_fp16 safe?
       // TODO: can we list target-specific intrinsics here?
       default: break;
@@ -3509,9 +3225,6 @@ static bool isKnownNonNullFromDominatingCondition(const Value *V,
     // Consider only compare instructions uniquely controlling a branch
     const ICmpInst *Cmp = dyn_cast<ICmpInst>(U);
     if (!Cmp)
-      continue;
-
-    if (DomConditionsSingleCmpUse && !Cmp->hasOneUse())
       continue;
 
     for (auto *CmpU : Cmp->users()) {
@@ -3830,26 +3543,44 @@ bool llvm::isKnownNotFullPoison(const Instruction *PoisonI) {
   // Set of instructions that we have proved will yield poison if PoisonI
   // does.
   SmallSet<const Value *, 16> YieldsPoison;
+  SmallSet<const BasicBlock *, 4> Visited;
   YieldsPoison.insert(PoisonI);
+  Visited.insert(PoisonI->getParent());
 
-  for (BasicBlock::const_iterator I = PoisonI->getIterator(), E = BB->end();
-       I != E; ++I) {
-    if (&*I != PoisonI) {
-      const Value *NotPoison = getGuaranteedNonFullPoisonOp(&*I);
-      if (NotPoison != nullptr && YieldsPoison.count(NotPoison)) return true;
-      if (!isGuaranteedToTransferExecutionToSuccessor(&*I))
-        return false;
-    }
+  BasicBlock::const_iterator Begin = PoisonI->getIterator(), End = BB->end();
 
-    // Mark poison that propagates from I through uses of I.
-    if (YieldsPoison.count(&*I)) {
-      for (const User *User : I->users()) {
-        const Instruction *UserI = cast<Instruction>(User);
-        if (UserI->getParent() == BB && propagatesFullPoison(UserI))
-          YieldsPoison.insert(User);
+  unsigned Iter = 0;
+  while (Iter++ < MaxDepth) {
+    for (auto &I : make_range(Begin, End)) {
+      if (&I != PoisonI) {
+        const Value *NotPoison = getGuaranteedNonFullPoisonOp(&I);
+        if (NotPoison != nullptr && YieldsPoison.count(NotPoison))
+          return true;
+        if (!isGuaranteedToTransferExecutionToSuccessor(&I))
+          return false;
+      }
+
+      // Mark poison that propagates from I through uses of I.
+      if (YieldsPoison.count(&I)) {
+        for (const User *User : I.users()) {
+          const Instruction *UserI = cast<Instruction>(User);
+          if (propagatesFullPoison(UserI))
+            YieldsPoison.insert(User);
+        }
       }
     }
-  }
+
+    if (auto *NextBB = BB->getSingleSuccessor()) {
+      if (Visited.insert(NextBB).second) {
+        BB = NextBB;
+        Begin = BB->getFirstNonPHI()->getIterator();
+        End = BB->end();
+        continue;
+      }
+    }
+
+    break;
+  };
   return false;
 }
 
@@ -3982,10 +3713,11 @@ static SelectPatternResult matchSelectPattern(CmpInst::Predicate Pred,
         return {(CmpLHS == FalseVal) ? SPF_ABS : SPF_NABS, SPNB_NA, false};
       }
     }
-    
+
     // Y >s C ? ~Y : ~C == ~Y <s ~C ? ~Y : ~C = SMIN(~Y, ~C)
     if (const auto *C2 = dyn_cast<ConstantInt>(FalseVal)) {
-      if (C1->getType() == C2->getType() && ~C1->getValue() == C2->getValue() &&
+      if (Pred == ICmpInst::ICMP_SGT && C1->getType() == C2->getType() &&
+          ~C1->getValue() == C2->getValue() &&
           (match(TrueVal, m_Not(m_Specific(CmpLHS))) ||
            match(CmpLHS, m_Not(m_Specific(TrueVal))))) {
         LHS = TrueVal;
@@ -4175,46 +3907,76 @@ static bool isTruePredicate(CmpInst::Predicate Pred, Value *LHS, Value *RHS,
 }
 
 /// Return true if "icmp Pred BLHS BRHS" is true whenever "icmp Pred
-/// ALHS ARHS" is true.
-static bool isImpliedCondOperands(CmpInst::Predicate Pred, Value *ALHS,
-                                  Value *ARHS, Value *BLHS, Value *BRHS,
-                                  const DataLayout &DL, unsigned Depth,
-                                  AssumptionCache *AC, const Instruction *CxtI,
-                                  const DominatorTree *DT) {
+/// ALHS ARHS" is true.  Otherwise, return None.
+static Optional<bool>
+isImpliedCondOperands(CmpInst::Predicate Pred, Value *ALHS, Value *ARHS,
+                      Value *BLHS, Value *BRHS, const DataLayout &DL,
+                      unsigned Depth, AssumptionCache *AC,
+                      const Instruction *CxtI, const DominatorTree *DT) {
   switch (Pred) {
   default:
-    return false;
+    return None;
 
   case CmpInst::ICMP_SLT:
   case CmpInst::ICMP_SLE:
-    return isTruePredicate(CmpInst::ICMP_SLE, BLHS, ALHS, DL, Depth, AC, CxtI,
-                           DT) &&
-           isTruePredicate(CmpInst::ICMP_SLE, ARHS, BRHS, DL, Depth, AC, CxtI,
-                           DT);
+    if (isTruePredicate(CmpInst::ICMP_SLE, BLHS, ALHS, DL, Depth, AC, CxtI,
+                        DT) &&
+        isTruePredicate(CmpInst::ICMP_SLE, ARHS, BRHS, DL, Depth, AC, CxtI, DT))
+      return true;
+    return None;
 
   case CmpInst::ICMP_ULT:
   case CmpInst::ICMP_ULE:
-    return isTruePredicate(CmpInst::ICMP_ULE, BLHS, ALHS, DL, Depth, AC, CxtI,
-                           DT) &&
-           isTruePredicate(CmpInst::ICMP_ULE, ARHS, BRHS, DL, Depth, AC, CxtI,
-                           DT);
+    if (isTruePredicate(CmpInst::ICMP_ULE, BLHS, ALHS, DL, Depth, AC, CxtI,
+                        DT) &&
+        isTruePredicate(CmpInst::ICMP_ULE, ARHS, BRHS, DL, Depth, AC, CxtI, DT))
+      return true;
+    return None;
   }
 }
 
-bool llvm::isImpliedCondition(Value *LHS, Value *RHS, const DataLayout &DL,
-                              unsigned Depth, AssumptionCache *AC,
-                              const Instruction *CxtI,
-                              const DominatorTree *DT) {
+/// Return true if "icmp1 APred ALHS ARHS" implies "icmp2 BPred BLHS BRHS" is
+/// true.  Return false if "icmp1 APred ALHS ARHS" implies "icmp2 BPred BLHS
+/// BRHS" is false.  Otherwise, return None if we can't infer anything.
+static Optional<bool> isImpliedCondMatchingOperands(CmpInst::Predicate APred,
+                                                    Value *ALHS, Value *ARHS,
+                                                    CmpInst::Predicate BPred,
+                                                    Value *BLHS, Value *BRHS) {
+  // The operands of the two compares must match.
+  bool IsMatchingOps = (ALHS == BLHS && ARHS == BRHS);
+  bool IsSwappedOps = (ALHS == BRHS && ARHS == BLHS);
+  if (!IsMatchingOps && !IsSwappedOps)
+    return None;
+
+  // Canonicalize the operands so they're matching.
+  if (IsSwappedOps) {
+    std::swap(BLHS, BRHS);
+    BPred = ICmpInst::getSwappedPredicate(BPred);
+  }
+  if (CmpInst::isImpliedTrueByMatchingCmp(APred, BPred))
+    return true;
+  if (CmpInst::isImpliedFalseByMatchingCmp(APred, BPred))
+    return false;
+
+  return None;
+}
+
+Optional<bool> llvm::isImpliedCondition(Value *LHS, Value *RHS,
+                                        const DataLayout &DL, bool InvertAPred,
+                                        unsigned Depth, AssumptionCache *AC,
+                                        const Instruction *CxtI,
+                                        const DominatorTree *DT) {
   assert(LHS->getType() == RHS->getType() && "mismatched type");
   Type *OpTy = LHS->getType();
   assert(OpTy->getScalarType()->isIntegerTy(1));
 
   // LHS ==> RHS by definition
-  if (LHS == RHS) return true;
+  if (!InvertAPred && LHS == RHS)
+    return true;
 
   if (OpTy->isVectorTy())
     // TODO: extending the code below to handle vectors
-    return false;
+    return None;
   assert(OpTy->isIntegerTy(1) && "implied by above");
 
   ICmpInst::Predicate APred, BPred;
@@ -4223,11 +3985,19 @@ bool llvm::isImpliedCondition(Value *LHS, Value *RHS, const DataLayout &DL,
 
   if (!match(LHS, m_ICmp(APred, m_Value(ALHS), m_Value(ARHS))) ||
       !match(RHS, m_ICmp(BPred, m_Value(BLHS), m_Value(BRHS))))
-    return false;
+    return None;
+
+  if (InvertAPred)
+    APred = CmpInst::getInversePredicate(APred);
+
+  Optional<bool> Implication =
+      isImpliedCondMatchingOperands(APred, ALHS, ARHS, BPred, BLHS, BRHS);
+  if (Implication)
+    return Implication;
 
   if (APred == BPred)
     return isImpliedCondOperands(APred, ALHS, ARHS, BLHS, BRHS, DL, Depth, AC,
                                  CxtI, DT);
 
-  return false;
+  return None;
 }

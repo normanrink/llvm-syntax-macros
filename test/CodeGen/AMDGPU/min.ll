@@ -1,11 +1,11 @@
-; RUN: llc -march=amdgcn -mcpu=SI < %s | FileCheck -check-prefix=SI -check-prefix=FUNC %s
+; RUN: llc -march=amdgcn < %s | FileCheck -check-prefix=SI -check-prefix=FUNC %s
 
-declare i32 @llvm.r600.read.tidig.x() nounwind readnone
+declare i32 @llvm.amdgcn.workitem.id.x() nounwind readnone
 
 ; FUNC-LABEL: {{^}}v_test_imin_sle_i32:
 ; SI: v_min_i32_e32
 define void @v_test_imin_sle_i32(i32 addrspace(1)* %out, i32 addrspace(1)* %aptr, i32 addrspace(1)* %bptr) nounwind {
-  %tid = call i32 @llvm.r600.read.tidig.x() nounwind readnone
+  %tid = call i32 @llvm.amdgcn.workitem.id.x() nounwind readnone
   %gep0 = getelementptr i32, i32 addrspace(1)* %aptr, i32 %tid
   %gep1 = getelementptr i32, i32 addrspace(1)* %bptr, i32 %tid
   %outgep = getelementptr i32, i32 addrspace(1)* %out, i32 %tid
@@ -101,7 +101,7 @@ define void @s_test_imin_sle_v4i16(<4 x i16> addrspace(1)* %out, <4 x i16> %a, <
 ; FUNC-LABEL: @v_test_imin_slt_i32
 ; SI: v_min_i32_e32
 define void @v_test_imin_slt_i32(i32 addrspace(1)* %out, i32 addrspace(1)* %aptr, i32 addrspace(1)* %bptr) nounwind {
-  %tid = call i32 @llvm.r600.read.tidig.x() nounwind readnone
+  %tid = call i32 @llvm.amdgcn.workitem.id.x() nounwind readnone
   %gep0 = getelementptr i32, i32 addrspace(1)* %aptr, i32 %tid
   %gep1 = getelementptr i32, i32 addrspace(1)* %bptr, i32 %tid
   %outgep = getelementptr i32, i32 addrspace(1)* %out, i32 %tid
@@ -153,7 +153,7 @@ define void @s_test_imin_sle_imm_i32(i32 addrspace(1)* %out, i32 %a) nounwind {
 ; FUNC-LABEL: @v_test_umin_ule_i32
 ; SI: v_min_u32_e32
 define void @v_test_umin_ule_i32(i32 addrspace(1)* %out, i32 addrspace(1)* %aptr, i32 addrspace(1)* %bptr) nounwind {
-  %tid = call i32 @llvm.r600.read.tidig.x() nounwind readnone
+  %tid = call i32 @llvm.amdgcn.workitem.id.x() nounwind readnone
   %gep0 = getelementptr i32, i32 addrspace(1)* %aptr, i32 %tid
   %gep1 = getelementptr i32, i32 addrspace(1)* %bptr, i32 %tid
   %outgep = getelementptr i32, i32 addrspace(1)* %out, i32 %tid
@@ -172,7 +172,7 @@ define void @v_test_umin_ule_i32(i32 addrspace(1)* %out, i32 addrspace(1)* %aptr
 ; SI-NOT: v_min_u32_e32
 ; SI: s_endpgm
 define void @v_test_umin_ule_v3i32(<3 x i32> addrspace(1)* %out, <3 x i32> addrspace(1)* %aptr, <3 x i32> addrspace(1)* %bptr) nounwind {
-  %tid = call i32 @llvm.r600.read.tidig.x() nounwind readnone
+  %tid = call i32 @llvm.amdgcn.workitem.id.x() nounwind readnone
   %gep0 = getelementptr <3 x i32>, <3 x i32> addrspace(1)* %aptr, i32 %tid
   %gep1 = getelementptr <3 x i32>, <3 x i32> addrspace(1)* %bptr, i32 %tid
   %outgep = getelementptr <3 x i32>, <3 x i32> addrspace(1)* %out, i32 %tid
@@ -195,7 +195,7 @@ define void @s_test_umin_ule_i32(i32 addrspace(1)* %out, i32 %a, i32 %b) nounwin
 ; FUNC-LABEL: @v_test_umin_ult_i32
 ; SI: v_min_u32_e32
 define void @v_test_umin_ult_i32(i32 addrspace(1)* %out, i32 addrspace(1)* %aptr, i32 addrspace(1)* %bptr) nounwind {
-  %tid = call i32 @llvm.r600.read.tidig.x() nounwind readnone
+  %tid = call i32 @llvm.amdgcn.workitem.id.x() nounwind readnone
   %gep0 = getelementptr i32, i32 addrspace(1)* %aptr, i32 %tid
   %gep1 = getelementptr i32, i32 addrspace(1)* %bptr, i32 %tid
   %outgep = getelementptr i32, i32 addrspace(1)* %out, i32 %tid
@@ -212,7 +212,7 @@ define void @v_test_umin_ult_i32(i32 addrspace(1)* %out, i32 addrspace(1)* %aptr
 ; SI: buffer_load_ubyte
 ; SI: v_min_u32_e32
 define void @v_test_umin_ult_i8(i8 addrspace(1)* %out, i8 addrspace(1)* %aptr, i8 addrspace(1)* %bptr) nounwind {
-  %tid = call i32 @llvm.r600.read.tidig.x() nounwind readnone
+  %tid = call i32 @llvm.amdgcn.workitem.id.x() nounwind readnone
   %gep0 = getelementptr i8, i8 addrspace(1)* %aptr, i32 %tid
   %gep1 = getelementptr i8, i8 addrspace(1)* %bptr, i32 %tid
   %outgep = getelementptr i8, i8 addrspace(1)* %out, i32 %tid
@@ -240,7 +240,7 @@ define void @s_test_umin_ult_i32(i32 addrspace(1)* %out, i32 %a, i32 %b) nounwin
 ; SI-NOT: v_min
 ; SI: s_endpgm
 define void @v_test_umin_ult_i32_multi_use(i32 addrspace(1)* %out0, i1 addrspace(1)* %out1, i32 addrspace(1)* %aptr, i32 addrspace(1)* %bptr) nounwind {
-  %tid = call i32 @llvm.r600.read.tidig.x() nounwind readnone
+  %tid = call i32 @llvm.amdgcn.workitem.id.x() nounwind readnone
   %gep0 = getelementptr i32, i32 addrspace(1)* %aptr, i32 %tid
   %gep1 = getelementptr i32, i32 addrspace(1)* %bptr, i32 %tid
   %outgep0 = getelementptr i32, i32 addrspace(1)* %out0, i32 %tid
@@ -301,8 +301,8 @@ define void @s_test_umin_ult_v8i16(<8 x i16> addrspace(1)* %out, <8 x i16> %a, <
 ; SI-DAG: s_load_dword [[A:s[0-9]+]], {{s\[[0-9]+:[0-9]+\]}}, 0xb
 ; SI-DAG: s_load_dword [[B:s[0-9]+]], {{s\[[0-9]+:[0-9]+\]}}, 0xc
 ; SI: s_min_u32 [[MIN:s[0-9]+]], [[A]], [[B]]
-; SI-NEXT: v_mov_b32_e32 [[VMIN:v[0-9]+]], [[MIN]]
-; SI-NEXT: buffer_store_dword [[VMIN]]
+; SI: v_mov_b32_e32 [[VMIN:v[0-9]+]], [[MIN]]
+; SI: buffer_store_dword [[VMIN]]
 define void @simplify_demanded_bits_test_umin_ult_i16(i32 addrspace(1)* %out, i16 zeroext %a, i16 zeroext %b) nounwind {
   %a.ext = zext i16 %a to i32
   %b.ext = zext i16 %b to i32
@@ -319,8 +319,8 @@ define void @simplify_demanded_bits_test_umin_ult_i16(i32 addrspace(1)* %out, i1
 ; SI-DAG: s_load_dword [[A:s[0-9]+]], {{s\[[0-9]+:[0-9]+\]}}, 0xb
 ; SI-DAG: s_load_dword [[B:s[0-9]+]], {{s\[[0-9]+:[0-9]+\]}}, 0xc
 ; SI: s_min_i32 [[MIN:s[0-9]+]], [[A]], [[B]]
-; SI-NEXT: v_mov_b32_e32 [[VMIN:v[0-9]+]], [[MIN]]
-; SI-NEXT: buffer_store_dword [[VMIN]]
+; SI: v_mov_b32_e32 [[VMIN:v[0-9]+]], [[MIN]]
+; SI: buffer_store_dword [[VMIN]]
 define void @simplify_demanded_bits_test_min_slt_i16(i32 addrspace(1)* %out, i16 signext %a, i16 signext %b) nounwind {
   %a.ext = sext i16 %a to i32
   %b.ext = sext i16 %b to i32

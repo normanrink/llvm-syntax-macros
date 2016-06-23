@@ -55,8 +55,7 @@ protected:
   };
 
   enum X86ProcFamilyEnum {
-    Others, IntelAtom, IntelSLM, IntelSNB, IntelIVB, IntelHSW, IntelBDW,
-    IntelKNL, IntelSKL, IntelSKX, IntelCNL
+    Others, IntelAtom, IntelSLM
   };
 
   /// X86 processor family: Intel Atom, and others
@@ -70,6 +69,9 @@ protected:
 
   /// MMX, 3DNow, 3DNow Athlon, or none supported.
   X863DNowEnum X863DNowLevel;
+
+  /// True if the processor supports X87 instructions.
+  bool HasX87;
 
   /// True if this processor has conditional move instructions
   /// (generally pentium pro+).
@@ -188,6 +190,10 @@ protected:
   /// True if the LEA instruction should be used for adjusting
   /// the stack pointer. This is an optimization for Intel Atom processors.
   bool UseLeaForSP;
+
+  /// True if there is no performance penalty to writing only the lower parts
+  /// of a YMM register without clearing the upper part.
+  bool HasFastPartialYMMWrite;
 
   /// True if 8-bit divisions are significantly faster than
   /// 32-bit divisions and should be used when possible.
@@ -367,6 +373,7 @@ public:
   PICStyles::Style getPICStyle() const { return PICStyle; }
   void setPICStyle(PICStyles::Style Style)  { PICStyle = Style; }
 
+  bool hasX87() const { return HasX87; }
   bool hasCMov() const { return HasCMov; }
   bool hasSSE1() const { return X86SSELevel >= SSE1; }
   bool hasSSE2() const { return X86SSELevel >= SSE2; }
@@ -421,6 +428,7 @@ public:
   bool hasSSEUnalignedMem() const { return HasSSEUnalignedMem; }
   bool hasCmpxchg16b() const { return HasCmpxchg16b; }
   bool useLeaForSP() const { return UseLeaForSP; }
+  bool hasFastPartialYMMWrite() const { return HasFastPartialYMMWrite; }
   bool hasSlowDivide32() const { return HasSlowDivide32; }
   bool hasSlowDivide64() const { return HasSlowDivide64; }
   bool padShortFunctions() const { return PadShortFunctions; }
@@ -440,6 +448,11 @@ public:
   bool isAtom() const { return X86ProcFamily == IntelAtom; }
   bool isSLM() const { return X86ProcFamily == IntelSLM; }
   bool useSoftFloat() const { return UseSoftFloat; }
+
+  /// Use mfence if we have SSE2 or we're on x86-64 (even if we asked for
+  /// no-sse2). There isn't any reason to disable it if the target processor
+  /// supports it.
+  bool hasMFence() const { return hasSSE2() || is64Bit(); }
 
   const Triple &getTargetTriple() const { return TargetTriple; }
 
@@ -535,11 +548,24 @@ public:
     }
   }
 
+  /// Determine if this global is defined in a Position Independent
+  /// Executable (PIE) where its definition cannot be interposed.
+  bool isGlobalDefinedInPIE(const GlobalValue *GV,
+                            const TargetMachine &TM) const {
+    return TM.Options.PositionIndependentExecutable &&
+           !GV->isDeclarationForLinker();
+  }
+
   /// ClassifyGlobalReference - Classify a global variable reference for the
   /// current subtarget according to how we should reference it in a non-pcrel
   /// context.
   unsigned char ClassifyGlobalReference(const GlobalValue *GV,
                                         const TargetMachine &TM)const;
+
+  /// classifyGlobalFunctionReference - Classify a global function reference
+  /// for the current subtarget.
+  unsigned char classifyGlobalFunctionReference(const GlobalValue *GV,
+                                                const TargetMachine &TM) const;
 
   /// Classify a blockaddress reference for the current subtarget according to
   /// how we should reference it in a non-pcrel context.

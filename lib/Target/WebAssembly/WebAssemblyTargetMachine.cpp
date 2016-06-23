@@ -21,7 +21,6 @@
 #include "llvm/CodeGen/Passes.h"
 #include "llvm/CodeGen/RegAllocRegistry.h"
 #include "llvm/IR/Function.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/TargetRegistry.h"
 #include "llvm/Target/TargetOptions.h"
 #include "llvm/Transforms/Scalar.h"
@@ -58,9 +57,9 @@ WebAssemblyTargetMachine::WebAssemblyTargetMachine(
 
   initAsmInfo();
 
-  // We need a reducible CFG, so disable some optimizations which tend to
-  // introduce irreducibility.
-  setRequiresStructuredCFG(true);
+  // Note that we don't use setRequiresStructuredCFG(true). It disables
+  // optimizations than we're ok with, and want, such as critical edge
+  // splitting and tail merging.
 }
 
 WebAssemblyTargetMachine::~WebAssemblyTargetMachine() {}
@@ -106,6 +105,7 @@ public:
   bool addILPOpts() override;
   void addPreRegAlloc() override;
   void addPostRegAlloc() override;
+  bool addGCPasses() override { return false; }
   void addPreEmitPass() override;
 };
 } // end anonymous namespace
@@ -178,18 +178,28 @@ void WebAssemblyPassConfig::addPostRegAlloc() {
   // TODO: The following CodeGen passes don't currently support code containing
   // virtual registers. Consider removing their restrictions and re-enabling
   // them.
-  //
+
+  // Has no asserts of its own, but was not written to handle virtual regs.
+  disablePass(&ShrinkWrapID);
   // We use our own PrologEpilogInserter which is very slightly modified to
   // tolerate virtual registers.
   disablePass(&PrologEpilogCodeInserterID);
-  // Fails with: should be run after register allocation.
+
+  // These functions all require the AllVRegsAllocated property.
   disablePass(&MachineCopyPropagationID);
+  disablePass(&PostRASchedulerID);
+  disablePass(&FuncletLayoutID);
+  disablePass(&StackMapLivenessID);
+  disablePass(&LiveDebugValuesID);
+  disablePass(&PatchableFunctionID);
 
-  // Mark registers as representing wasm's expression stack.
-  addPass(createWebAssemblyRegStackify());
+  if (getOptLevel() != CodeGenOpt::None) {
+    // Mark registers as representing wasm's expression stack.
+    addPass(createWebAssemblyRegStackify());
 
-  // Run the register coloring pass to reduce the total number of registers.
-  addPass(createWebAssemblyRegColoring());
+    // Run the register coloring pass to reduce the total number of registers.
+    addPass(createWebAssemblyRegColoring());
+  }
 
   TargetPassConfig::addPostRegAlloc();
 
@@ -201,6 +211,9 @@ void WebAssemblyPassConfig::addPostRegAlloc() {
 
 void WebAssemblyPassConfig::addPreEmitPass() {
   TargetPassConfig::addPreEmitPass();
+
+  // Eliminate multiple-entry loops.
+  addPass(createWebAssemblyFixIrreducibleControlFlow());
 
   // Put the CFG in structured form; insert BLOCK and LOOP markers.
   addPass(createWebAssemblyCFGStackify());

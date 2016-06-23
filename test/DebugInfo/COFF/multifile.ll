@@ -28,31 +28,33 @@
 ; X86:      calll   _g
 ; X86:      .cv_loc 0 1 8 0 # one.c:8:0
 ; X86:      ret
-; X86-NEXT: [[END_OF_F:.*]]:
+; X86:      [[END_OF_F:.?Lfunc_end.*]]:
 ;
 ; X86-LABEL: .section        .debug$S,"dr"
 ; X86-NEXT: .long   4
 ; Symbol subsection
 ; X86-NEXT: .long   241
-; X86-NEXT: .long [[F1_END:.*]]-[[F1_START:.*]]
+; X86-NEXT: .long [[F1_END:.*]]-[[F1_START:.*]] #
 ; X86-NEXT: [[F1_START]]:
-; X86-NEXT: .short [[PROC_SEGMENT_END:.*]]-[[PROC_SEGMENT_START:.*]]
+; X86-NEXT: .short [[PROC_SEGMENT_END:.*]]-[[PROC_SEGMENT_START:.*]] #
 ; X86-NEXT: [[PROC_SEGMENT_START]]:
 ; X86-NEXT: .short  4423
-; X86-NEXT: .zero   12
+; X86-NEXT: .long   0
+; X86-NEXT: .long   0
+; X86-NEXT: .long   0
 ; X86-NEXT: .long [[END_OF_F]]-_f
-; X86-NEXT: .zero   12
+; X86-NEXT: .long   0
+; X86-NEXT: .long   0
+; X86-NEXT: .long   0
 ; X86-NEXT: .secrel32 _f
 ; X86-NEXT: .secidx _f
 ; X86-NEXT: .byte   0
-; X86-NEXT: .byte   102
-; X86-NEXT: .byte   0
+; X86-NEXT: .asciz "f"
 ; X86-NEXT: [[PROC_SEGMENT_END]]:
 ; X86-NEXT: .short  2
 ; X86-NEXT: .short  4431
 ; X86-NEXT: [[F1_END]]:
-; Padding
-; X86-NEXT: .zero   3
+; X86-NEXT: .p2align   2
 ; Line table
 ; X86-NEXT: .cv_linetable 0, _f, [[END_OF_F]]
 ; File index to string table offset subsection
@@ -89,7 +91,7 @@
 ; OBJ32-NEXT:     +0x0 [
 ; OBJ32-NEXT:       LineNumberStart: 1
 ; OBJ32-NEXT:       LineNumberEndDelta: 0
-; OBJ32-NEXT:       IsStatement: Yes
+; OBJ32-NEXT:       IsStatement: No
 ; OBJ32-NEXT:     ]
 ; OBJ32-NEXT:   ]
 ; OBJ32-NEXT:   FilenameSegment [
@@ -97,7 +99,7 @@
 ; OBJ32-NEXT:     +0x5 [
 ; OBJ32-NEXT:       LineNumberStart: 2
 ; OBJ32-NEXT:       LineNumberEndDelta: 0
-; OBJ32-NEXT:       IsStatement: Yes
+; OBJ32-NEXT:       IsStatement: No
 ; OBJ32-NEXT:     ]
 ; OBJ32-NEXT:   ]
 ; OBJ32-NEXT:   FilenameSegment [
@@ -105,12 +107,12 @@
 ; OBJ32-NEXT:     +0xA [
 ; OBJ32-NEXT:       LineNumberStart: 7
 ; OBJ32-NEXT:       LineNumberEndDelta: 0
-; OBJ32-NEXT:       IsStatement: Yes
+; OBJ32-NEXT:       IsStatement: No
 ; OBJ32-NEXT:     ]
 ; OBJ32-NEXT:     +0xF [
 ; OBJ32-NEXT:       LineNumberStart: 8
 ; OBJ32-NEXT:       LineNumberEndDelta: 0
-; OBJ32-NEXT:       IsStatement: Yes
+; OBJ32-NEXT:       IsStatement: No
 ; OBJ32-NEXT:     ]
 ; OBJ32-NEXT:   ]
 ; OBJ32-NEXT: ]
@@ -132,31 +134,33 @@
 ; X64:      .cv_loc 0 2 8 0 # one.c:8:0
 ; X64:      addq    $40, %rsp
 ; X64-NEXT: ret
-; X64-NEXT: [[END_OF_F:.*]]:
+; X64:      [[END_OF_F:.?Lfunc_end.*]]:
 ;
 ; X64-LABEL: .section        .debug$S,"dr"
 ; X64-NEXT: .long   4
 ; Symbol subsection
 ; X64-NEXT: .long   241
-; X64-NEXT: .long [[F1_END:.*]]-[[F1_START:.*]]
+; X64-NEXT: .long [[F1_END:.*]]-[[F1_START:.*]] #
 ; X64-NEXT: [[F1_START]]:
-; X64-NEXT: .short [[PROC_SEGMENT_END:.*]]-[[PROC_SEGMENT_START:.*]]
+; X64-NEXT: .short [[PROC_SEGMENT_END:.*]]-[[PROC_SEGMENT_START:.*]] #
 ; X64-NEXT: [[PROC_SEGMENT_START]]:
 ; X64-NEXT: .short  4423
-; X64-NEXT: .zero   12
+; X64-NEXT: .long   0
+; X64-NEXT: .long   0
+; X64-NEXT: .long   0
 ; X64-NEXT: .long [[END_OF_F]]-f
-; X64-NEXT: .zero   12
+; X64-NEXT: .long   0
+; X64-NEXT: .long   0
+; X64-NEXT: .long   0
 ; X64-NEXT: .secrel32 f
 ; X64-NEXT: .secidx f
 ; X64-NEXT: .byte   0
-; X64-NEXT: .byte   102
-; X64-NEXT: .byte   0
+; X64-NEXT: .asciz "f"
 ; X64-NEXT: [[PROC_SEGMENT_END]]:
 ; X64-NEXT: .short  2
 ; X64-NEXT: .short  4431
 ; X64-NEXT: [[F1_END]]:
-; Padding
-; X64-NEXT: .zero   3
+; X64-NEXT: .p2align   2
 ; X64: .cv_linetable 0, f, [[END_OF_F]]
 ; X64: .cv_filechecksums
 ; X64: .cv_stringtable
@@ -190,7 +194,7 @@
 ; OBJ64-NEXT:     +0x0 [
 ; OBJ64-NEXT:       LineNumberStart: 3
 ; OBJ64-NEXT:       LineNumberEndDelta: 0
-; OBJ64-NEXT:       IsStatement: Yes
+; OBJ64-NEXT:       IsStatement: No
 ; OBJ64-NEXT:     ]
 ; OBJ64-NEXT:   ]
 ; OBJ64-NEXT:   FilenameSegment [
@@ -198,7 +202,7 @@
 ; OBJ64-NEXT:     +0x4 [
 ; OBJ64-NEXT:       LineNumberStart: 1
 ; OBJ64-NEXT:       LineNumberEndDelta: 0
-; OBJ64-NEXT:       IsStatement: Yes
+; OBJ64-NEXT:       IsStatement: No
 ; OBJ64-NEXT:     ]
 ; OBJ64-NEXT:   ]
 ; OBJ64-NEXT:   FilenameSegment [
@@ -206,7 +210,7 @@
 ; OBJ64-NEXT:     +0x9 [
 ; OBJ64-NEXT:       LineNumberStart: 2
 ; OBJ64-NEXT:       LineNumberEndDelta: 0
-; OBJ64-NEXT:       IsStatement: Yes
+; OBJ64-NEXT:       IsStatement: No
 ; OBJ64-NEXT:     ]
 ; OBJ64-NEXT:   ]
 ; OBJ64-NEXT:   FilenameSegment [
@@ -214,12 +218,12 @@
 ; OBJ64-NEXT:     +0xE [
 ; OBJ64-NEXT:       LineNumberStart: 7
 ; OBJ64-NEXT:       LineNumberEndDelta: 0
-; OBJ64-NEXT:       IsStatement: Yes
+; OBJ64-NEXT:       IsStatement: No
 ; OBJ64-NEXT:     ]
 ; OBJ64-NEXT:     +0x13 [
 ; OBJ64-NEXT:       LineNumberStart: 8
 ; OBJ64-NEXT:       LineNumberEndDelta: 0
-; OBJ64-NEXT:       IsStatement: Yes
+; OBJ64-NEXT:       IsStatement: No
 ; OBJ64-NEXT:     ]
 ; OBJ64-NEXT:   ]
 ; OBJ64-NEXT: ]
@@ -242,11 +246,10 @@ attributes #1 = { "less-precise-fpmad"="false" "no-frame-pointer-elim"="false" "
 !llvm.module.flags = !{!9, !10}
 !llvm.ident = !{!11}
 
-!0 = distinct !DICompileUnit(language: DW_LANG_C99, producer: "clang version 3.5 ", isOptimized: false, emissionKind: 0, file: !1, enums: !2, retainedTypes: !2, subprograms: !3, globals: !2, imports: !2)
+!0 = distinct !DICompileUnit(language: DW_LANG_C99, producer: "clang version 3.5 ", isOptimized: false, emissionKind: FullDebug, file: !1, enums: !2, retainedTypes: !2, globals: !2, imports: !2)
 !1 = !DIFile(filename: "<unknown>", directory: "D:\5C")
 !2 = !{}
-!3 = !{!4}
-!4 = distinct !DISubprogram(name: "f", line: 3, isLocal: false, isDefinition: true, virtualIndex: 6, flags: DIFlagPrototyped, isOptimized: false, scopeLine: 3, file: !5, scope: !6, type: !7, variables: !2)
+!4 = distinct !DISubprogram(name: "f", line: 3, isLocal: false, isDefinition: true, virtualIndex: 6, flags: DIFlagPrototyped, isOptimized: false, unit: !0, scopeLine: 3, file: !5, scope: !6, type: !7, variables: !2)
 !5 = !DIFile(filename: "input.c", directory: "D:\5C")
 !6 = !DIFile(filename: "input.c", directory: "D:C")
 !7 = !DISubroutineType(types: !8)

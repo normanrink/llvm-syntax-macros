@@ -12,6 +12,7 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/Optional.h"
 #include "llvm/ADT/SmallString.h"
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/DataTypes.h"
 #include "llvm/Support/Dwarf.h"
@@ -244,8 +245,12 @@ public:
                  (int32_t)DataAlignmentFactor);
     OS << format("  Return address column: %d\n",
                  (int32_t)ReturnAddressRegister);
-    if (!AugmentationData.empty())
-      OS << "  Augmentation data:     " << AugmentationData << "\n";
+    if (!AugmentationData.empty()) {
+      OS << "  Augmentation data:    ";
+      for (uint8_t Byte : AugmentationData)
+        OS << ' ' << hexdigit(Byte >> 4) << hexdigit(Byte & 0xf);
+      OS << "\n";
+    }
     OS << "\n";
   }
 
@@ -640,9 +645,8 @@ void DWARFDebugFrame::parse(DataExtractor Data) {
             Offset + static_cast<uint32_t>(AugmentationLength);
 
           // Decode the LSDA if the CIE augmentation string said we should.
-          uint64_t LSDA = 0;
           if (Cie->getLSDAPointerEncoding() != DW_EH_PE_omit)
-            LSDA = readPointer(Data, Offset, Cie->getLSDAPointerEncoding());
+            readPointer(Data, Offset, Cie->getLSDAPointerEncoding());
 
           if (Offset != EndAugmentationOffset)
             ReportError("Parsing augmentation data at %lx failed");

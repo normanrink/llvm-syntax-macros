@@ -12,24 +12,21 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef LLVM_LIB_TARGET_R600_R600INSTRINFO_H
-#define LLVM_LIB_TARGET_R600_R600INSTRINFO_H
+#ifndef LLVM_LIB_TARGET_AMDGPU_R600INSTRINFO_H
+#define LLVM_LIB_TARGET_AMDGPU_R600INSTRINFO_H
 
 #include "AMDGPUInstrInfo.h"
 #include "R600Defines.h"
 #include "R600RegisterInfo.h"
-#include <map>
 
 namespace llvm {
-
   class AMDGPUTargetMachine;
   class DFAPacketizer;
-  class ScheduleDAG;
   class MachineFunction;
   class MachineInstr;
   class MachineInstrBuilder;
 
-  class R600InstrInfo : public AMDGPUInstrInfo {
+  class R600InstrInfo final : public AMDGPUInstrInfo {
   private:
   const R600RegisterInfo RI;
 
@@ -168,9 +165,9 @@ namespace llvm {
 
   unsigned RemoveBranch(MachineBasicBlock &MBB) const override;
 
-  bool isPredicated(const MachineInstr *MI) const override;
+  bool isPredicated(const MachineInstr &MI) const override;
 
-  bool isPredicable(MachineInstr *MI) const override;
+  bool isPredicable(MachineInstr &MI) const override;
 
   bool
    isProfitableToDupForIfCvt(MachineBasicBlock &MBB, unsigned NumCyles,
@@ -187,8 +184,8 @@ namespace llvm {
                        unsigned NumFCycles, unsigned ExtraFCycles,
                        BranchProbability Probability) const override;
 
-  bool DefinesPredicate(MachineInstr *MI,
-                                  std::vector<MachineOperand> &Pred) const override;
+  bool DefinesPredicate(MachineInstr &MI,
+                        std::vector<MachineOperand> &Pred) const override;
 
   bool SubsumesPredicate(ArrayRef<MachineOperand> Pred1,
                          ArrayRef<MachineOperand> Pred2) const override;
@@ -196,10 +193,10 @@ namespace llvm {
   bool isProfitableToUnpredicate(MachineBasicBlock &TMBB,
                                           MachineBasicBlock &FMBB) const override;
 
-  bool PredicateInstruction(MachineInstr *MI,
+  bool PredicateInstruction(MachineInstr &MI,
                             ArrayRef<MachineOperand> Pred) const override;
 
-  unsigned int getPredicationCost(const MachineInstr *) const override;
+  unsigned int getPredicationCost(const MachineInstr &) const override;
 
   unsigned int getInstrLatency(const InstrItineraryData *ItinData,
                                const MachineInstr *MI,
@@ -214,20 +211,33 @@ namespace llvm {
   void reserveIndirectRegisters(BitVector &Reserved,
                                 const MachineFunction &MF) const;
 
-  unsigned calculateIndirectAddress(unsigned RegIndex,
-                                    unsigned Channel) const override;
+  /// Calculate the "Indirect Address" for the given \p RegIndex and
+  /// \p Channel
+  ///
+  /// We model indirect addressing using a virtual address space that can be
+  /// accesed with loads and stores.  The "Indirect Address" is the memory
+  /// address in this virtual address space that maps to the given \p RegIndex
+  /// and \p Channel.
+  unsigned calculateIndirectAddress(unsigned RegIndex, unsigned Channel) const;
+
 
   const TargetRegisterClass *getIndirectAddrRegClass() const override;
 
+  /// \brief Build instruction(s) for an indirect register write.
+  ///
+  /// \returns The instruction that performs the indirect register write
   MachineInstrBuilder buildIndirectWrite(MachineBasicBlock *MBB,
-                          MachineBasicBlock::iterator I,
-                          unsigned ValueReg, unsigned Address,
-                          unsigned OffsetReg) const override;
+                                         MachineBasicBlock::iterator I,
+                                         unsigned ValueReg, unsigned Address,
+                                         unsigned OffsetReg) const;
 
+  /// \brief Build instruction(s) for an indirect register read.
+  ///
+  /// \returns The instruction that performs the indirect register read
   MachineInstrBuilder buildIndirectRead(MachineBasicBlock *MBB,
                                         MachineBasicBlock::iterator I,
                                         unsigned ValueReg, unsigned Address,
-                                        unsigned OffsetReg) const override;
+                                        unsigned OffsetReg) const;
 
   unsigned getMaxAlusPerClause() const;
 

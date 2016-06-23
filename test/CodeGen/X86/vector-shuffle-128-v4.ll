@@ -302,6 +302,35 @@ define <4 x float> @shuffle_v4f32_1133(<4 x float> %a, <4 x float> %b) {
   ret <4 x float> %shuffle
 }
 
+define <4 x float> @shuffle_v4f32_0145(<4 x float> %a, <4 x float> %b) {
+; SSE-LABEL: shuffle_v4f32_0145:
+; SSE:       # BB#0:
+; SSE-NEXT:    unpcklpd {{.*#+}} xmm0 = xmm0[0],xmm1[0]
+; SSE-NEXT:    retq
+;
+; AVX-LABEL: shuffle_v4f32_0145:
+; AVX:       # BB#0:
+; AVX-NEXT:    vunpcklpd {{.*#+}} xmm0 = xmm0[0],xmm1[0]
+; AVX-NEXT:    retq
+  %shuffle = shufflevector <4 x float> %a, <4 x float> %b, <4 x i32> <i32 0, i32 1, i32 4, i32 5>
+  ret <4 x float> %shuffle
+}
+
+define <4 x float> @shuffle_v4f32_6723(<4 x float> %a, <4 x float> %b) {
+; SSE-LABEL: shuffle_v4f32_6723:
+; SSE:       # BB#0:
+; SSE-NEXT:    unpckhpd {{.*#+}} xmm1 = xmm1[1],xmm0[1]
+; SSE-NEXT:    movapd %xmm1, %xmm0
+; SSE-NEXT:    retq
+;
+; AVX-LABEL: shuffle_v4f32_6723:
+; AVX:       # BB#0:
+; AVX-NEXT:    vunpckhpd {{.*#+}} xmm0 = xmm1[1],xmm0[1]
+; AVX-NEXT:    retq
+  %shuffle = shufflevector <4 x float> %a, <4 x float> %b, <4 x i32> <i32 6, i32 7, i32 2, i32 3>
+  ret <4 x float> %shuffle
+}
+
 define <4 x i32> @shuffle_v4i32_0124(<4 x i32> %a, <4 x i32> %b) {
 ; SSE2-LABEL: shuffle_v4i32_0124:
 ; SSE2:       # BB#0:
@@ -1797,6 +1826,131 @@ define <4 x float> @shuffle_v4f32_bitcast_0045(<4 x float> %a, <4 x i32> %b) {
   ret <4 x float> %3
 }
 
+define <4 x float> @mask_v4f32_4127(<4 x float> %a, <4 x float> %b) {
+; SSE2-LABEL: mask_v4f32_4127:
+; SSE2:       # BB#0:
+; SSE2-NEXT:    shufps {{.*#+}} xmm1 = xmm1[0,3],xmm0[1,2]
+; SSE2-NEXT:    shufps {{.*#+}} xmm1 = xmm1[0,2,3,1]
+; SSE2-NEXT:    movaps %xmm1, %xmm0
+; SSE2-NEXT:    retq
+;
+; SSE3-LABEL: mask_v4f32_4127:
+; SSE3:       # BB#0:
+; SSE3-NEXT:    shufps {{.*#+}} xmm1 = xmm1[0,3],xmm0[1,2]
+; SSE3-NEXT:    shufps {{.*#+}} xmm1 = xmm1[0,2,3,1]
+; SSE3-NEXT:    movaps %xmm1, %xmm0
+; SSE3-NEXT:    retq
+;
+; SSSE3-LABEL: mask_v4f32_4127:
+; SSSE3:       # BB#0:
+; SSSE3-NEXT:    shufps {{.*#+}} xmm1 = xmm1[0,3],xmm0[1,2]
+; SSSE3-NEXT:    shufps {{.*#+}} xmm1 = xmm1[0,2,3,1]
+; SSSE3-NEXT:    movaps %xmm1, %xmm0
+; SSSE3-NEXT:    retq
+;
+; SSE41-LABEL: mask_v4f32_4127:
+; SSE41:       # BB#0:
+; SSE41-NEXT:    blendps {{.*#+}} xmm0 = xmm1[0],xmm0[1,2],xmm1[3]
+; SSE41-NEXT:    retq
+;
+; AVX-LABEL: mask_v4f32_4127:
+; AVX:       # BB#0:
+; AVX-NEXT:    vblendps {{.*#+}} xmm0 = xmm1[0],xmm0[1,2],xmm1[3]
+; AVX-NEXT:    retq
+  %1 = bitcast <4 x float> %a to <4 x i32>
+  %2 = bitcast <4 x float> %b to <4 x i32>
+  %3 = and <4 x i32> %1, <i32  0, i32 -1, i32 -1, i32  0>
+  %4 = and <4 x i32> %2, <i32 -1, i32  0, i32  0, i32 -1>
+  %5 = or <4 x i32> %4, %3
+  %6 = bitcast <4 x i32> %5 to <4 x float>
+  ret <4 x float> %6
+}
+
+define <4 x float> @mask_v4f32_0127(<4 x float> %a, <4 x float> %b) {
+; SSE2-LABEL: mask_v4f32_0127:
+; SSE2:       # BB#0:
+; SSE2-NEXT:    shufps {{.*#+}} xmm0 = xmm0[3,0],xmm1[2,0]
+; SSE2-NEXT:    shufps {{.*#+}} xmm1 = xmm1[0,1],xmm0[2,0]
+; SSE2-NEXT:    movaps %xmm1, %xmm0
+; SSE2-NEXT:    retq
+;
+; SSE3-LABEL: mask_v4f32_0127:
+; SSE3:       # BB#0:
+; SSE3-NEXT:    shufps {{.*#+}} xmm0 = xmm0[3,0],xmm1[2,0]
+; SSE3-NEXT:    shufps {{.*#+}} xmm1 = xmm1[0,1],xmm0[2,0]
+; SSE3-NEXT:    movaps %xmm1, %xmm0
+; SSE3-NEXT:    retq
+;
+; SSSE3-LABEL: mask_v4f32_0127:
+; SSSE3:       # BB#0:
+; SSSE3-NEXT:    shufps {{.*#+}} xmm0 = xmm0[3,0],xmm1[2,0]
+; SSSE3-NEXT:    shufps {{.*#+}} xmm1 = xmm1[0,1],xmm0[2,0]
+; SSSE3-NEXT:    movaps %xmm1, %xmm0
+; SSSE3-NEXT:    retq
+;
+; SSE41-LABEL: mask_v4f32_0127:
+; SSE41:       # BB#0:
+; SSE41-NEXT:    blendps {{.*#+}} xmm0 = xmm1[0,1,2],xmm0[3]
+; SSE41-NEXT:    retq
+;
+; AVX-LABEL: mask_v4f32_0127:
+; AVX:       # BB#0:
+; AVX-NEXT:    vblendps {{.*#+}} xmm0 = xmm1[0,1,2],xmm0[3]
+; AVX-NEXT:    retq
+  %1 = bitcast <4 x float> %a to <2 x i64>
+  %2 = bitcast <4 x float> %b to <2 x i64>
+  %3 = and <2 x i64> %1, <i64 0, i64 -4294967296>
+  %4 = and <2 x i64> %2, <i64 -1, i64 4294967295>
+  %5 = or <2 x i64> %4, %3
+  %6 = bitcast <2 x i64> %5 to <4 x float>
+  ret <4 x float> %6
+}
+
+define <4 x i32> @mask_v4i32_0127(<4 x i32> %a, <4 x i32> %b) {
+; SSE2-LABEL: mask_v4i32_0127:
+; SSE2:       # BB#0:
+; SSE2-NEXT:    shufps {{.*#+}} xmm0 = xmm0[3,0],xmm1[2,0]
+; SSE2-NEXT:    shufps {{.*#+}} xmm1 = xmm1[0,1],xmm0[2,0]
+; SSE2-NEXT:    movaps %xmm1, %xmm0
+; SSE2-NEXT:    retq
+;
+; SSE3-LABEL: mask_v4i32_0127:
+; SSE3:       # BB#0:
+; SSE3-NEXT:    shufps {{.*#+}} xmm0 = xmm0[3,0],xmm1[2,0]
+; SSE3-NEXT:    shufps {{.*#+}} xmm1 = xmm1[0,1],xmm0[2,0]
+; SSE3-NEXT:    movaps %xmm1, %xmm0
+; SSE3-NEXT:    retq
+;
+; SSSE3-LABEL: mask_v4i32_0127:
+; SSSE3:       # BB#0:
+; SSSE3-NEXT:    shufps {{.*#+}} xmm0 = xmm0[3,0],xmm1[2,0]
+; SSSE3-NEXT:    shufps {{.*#+}} xmm1 = xmm1[0,1],xmm0[2,0]
+; SSSE3-NEXT:    movaps %xmm1, %xmm0
+; SSSE3-NEXT:    retq
+;
+; SSE41-LABEL: mask_v4i32_0127:
+; SSE41:       # BB#0:
+; SSE41-NEXT:    pblendw {{.*#+}} xmm0 = xmm1[0,1,2,3,4,5],xmm0[6,7]
+; SSE41-NEXT:    retq
+;
+; AVX1-LABEL: mask_v4i32_0127:
+; AVX1:       # BB#0:
+; AVX1-NEXT:    vpblendw {{.*#+}} xmm0 = xmm1[0,1,2,3,4,5],xmm0[6,7]
+; AVX1-NEXT:    retq
+;
+; AVX2-LABEL: mask_v4i32_0127:
+; AVX2:       # BB#0:
+; AVX2-NEXT:    vpblendd {{.*#+}} xmm0 = xmm1[0,1,2],xmm0[3]
+; AVX2-NEXT:    retq
+  %1 = bitcast <4 x i32> %a to <2 x i64>
+  %2 = bitcast <4 x i32> %b to <2 x i64>
+  %3 = and <2 x i64> %1, <i64 0, i64 -4294967296>
+  %4 = and <2 x i64> %2, <i64 -1, i64 4294967295>
+  %5 = or <2 x i64> %4, %3
+  %6 = bitcast <2 x i64> %5 to <4 x i32>
+  ret <4 x i32> %6
+}
+
 define <4 x i32> @insert_reg_and_zero_v4i32(i32 %a) {
 ; SSE-LABEL: insert_reg_and_zero_v4i32:
 ; SSE:       # BB#0:
@@ -1927,17 +2081,17 @@ define <4 x i32> @insert_reg_lo_v4i32(i64 %a, <4 x i32> %b) {
 define <4 x i32> @insert_mem_lo_v4i32(<2 x i32>* %ptr, <4 x i32> %b) {
 ; SSE2-LABEL: insert_mem_lo_v4i32:
 ; SSE2:       # BB#0:
-; SSE2-NEXT:    movlpd (%rdi), %xmm0
+; SSE2-NEXT:    movlpd {{.*#+}} xmm0 = mem[0],xmm0[1]
 ; SSE2-NEXT:    retq
 ;
 ; SSE3-LABEL: insert_mem_lo_v4i32:
 ; SSE3:       # BB#0:
-; SSE3-NEXT:    movlpd (%rdi), %xmm0
+; SSE3-NEXT:    movlpd {{.*#+}} xmm0 = mem[0],xmm0[1]
 ; SSE3-NEXT:    retq
 ;
 ; SSSE3-LABEL: insert_mem_lo_v4i32:
 ; SSSE3:       # BB#0:
-; SSSE3-NEXT:    movlpd (%rdi), %xmm0
+; SSSE3-NEXT:    movlpd {{.*#+}} xmm0 = mem[0],xmm0[1]
 ; SSSE3-NEXT:    retq
 ;
 ; SSE41-LABEL: insert_mem_lo_v4i32:
@@ -2019,12 +2173,12 @@ define <4 x float> @insert_reg_lo_v4f32(double %a, <4 x float> %b) {
 define <4 x float> @insert_mem_lo_v4f32(<2 x float>* %ptr, <4 x float> %b) {
 ; SSE-LABEL: insert_mem_lo_v4f32:
 ; SSE:       # BB#0:
-; SSE-NEXT:    movlpd (%rdi), %xmm0
+; SSE-NEXT:    movlpd {{.*#+}} xmm0 = mem[0],xmm0[1]
 ; SSE-NEXT:    retq
 ;
 ; AVX-LABEL: insert_mem_lo_v4f32:
 ; AVX:       # BB#0:
-; AVX-NEXT:    vmovlpd (%rdi), %xmm0, %xmm0
+; AVX-NEXT:    vmovlpd {{.*#+}} xmm0 = mem[0],xmm0[1]
 ; AVX-NEXT:    retq
   %a = load <2 x float>, <2 x float>* %ptr
   %v = shufflevector <2 x float> %a, <2 x float> undef, <4 x i32> <i32 0, i32 1, i32 undef, i32 undef>
@@ -2052,12 +2206,12 @@ define <4 x float> @insert_reg_hi_v4f32(double %a, <4 x float> %b) {
 define <4 x float> @insert_mem_hi_v4f32(<2 x float>* %ptr, <4 x float> %b) {
 ; SSE-LABEL: insert_mem_hi_v4f32:
 ; SSE:       # BB#0:
-; SSE-NEXT:    movhpd (%rdi), %xmm0
+; SSE-NEXT:    movhpd {{.*#+}} xmm0 = xmm0[0],mem[0]
 ; SSE-NEXT:    retq
 ;
 ; AVX-LABEL: insert_mem_hi_v4f32:
 ; AVX:       # BB#0:
-; AVX-NEXT:    vmovhpd (%rdi), %xmm0, %xmm0
+; AVX-NEXT:    vmovhpd {{.*#+}} xmm0 = xmm0[0],mem[0]
 ; AVX-NEXT:    retq
   %a = load <2 x float>, <2 x float>* %ptr
   %v = shufflevector <2 x float> %a, <2 x float> undef, <4 x i32> <i32 0, i32 1, i32 undef, i32 undef>

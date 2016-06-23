@@ -52,7 +52,7 @@ X86RegisterInfo::X86RegisterInfo(const Triple &TT)
                          X86_MC::getDwarfRegFlavour(TT, false),
                          X86_MC::getDwarfRegFlavour(TT, true),
                          (TT.isArch64Bit() ? X86::RIP : X86::EIP)) {
-  X86_MC::InitLLVM2SEHRegisterMapping(this);
+  X86_MC::initLLVMToSEHAndCVRegMapping(this);
 
   // Cache some information.
   Is64Bit = TT.isArch64Bit();
@@ -299,6 +299,10 @@ X86RegisterInfo::getCalleeSavedRegs(const MachineFunction *MF) const {
       return CSR_Win64_SaveList;
     if (CallsEHReturn)
       return CSR_64EHRet_SaveList;
+    if (Subtarget.getTargetLowering()->supportSwiftError() &&
+        MF->getFunction()->getAttributes().hasAttrSomewhere(
+            Attribute::SwiftError))
+      return CSR_64_SwiftError_SaveList;
     return CSR_64_SaveList;
   }
   if (CallsEHReturn)
@@ -385,6 +389,10 @@ X86RegisterInfo::getCallPreservedMask(const MachineFunction &MF,
   if (Is64Bit) {
     if (IsWin64)
       return CSR_Win64_RegMask;
+    if (Subtarget.getTargetLowering()->supportSwiftError() &&
+        MF.getFunction()->getAttributes().hasAttrSomewhere(
+            Attribute::SwiftError))
+      return CSR_64_SwiftError_RegMask;
     return CSR_64_RegMask;
   }
   return CSR_32_RegMask;

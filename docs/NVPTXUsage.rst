@@ -361,7 +361,7 @@ With programmatic pass pipeline:
 
 .. code-block:: c++
 
-  extern ModulePass *llvm::createNVVMReflectPass(const StringMap<int>& Mapping);
+  extern FunctionPass *llvm::createNVVMReflectPass(const StringMap<int>& Mapping);
 
   StringMap<int> ReflectParams;
   ReflectParams["__CUDA_FTZ"] = 1;
@@ -395,7 +395,7 @@ JIT compiling a PTX string to a device binary:
 .. code-block:: c++
 
     CUmodule module;
-    CUfunction funcion;
+    CUfunction function;
 
     // JIT compile a null-terminated PTX string
     cuModuleLoadData(&module, (void*)PTXString);

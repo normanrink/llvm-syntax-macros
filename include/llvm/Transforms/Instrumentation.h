@@ -96,7 +96,7 @@ struct InstrProfOptions {
 };
 
 /// Insert frontend instrumentation based profiling.
-ModulePass *createInstrProfilingPass(
+ModulePass *createInstrProfilingLegacyPass(
     const InstrProfOptions &Options = InstrProfOptions());
 
 // Insert AddressSanitizer (address sanity checking) instrumentation
@@ -116,11 +116,24 @@ ModulePass *createDataFlowSanitizerPass(
     const std::vector<std::string> &ABIListFiles = std::vector<std::string>(),
     void *(*getArgTLS)() = nullptr, void *(*getRetValTLS)() = nullptr);
 
+// Options for EfficiencySanitizer sub-tools.
+struct EfficiencySanitizerOptions {
+  EfficiencySanitizerOptions() : ToolType(ESAN_None) {}
+  enum Type {
+    ESAN_None = 0,
+    ESAN_CacheFrag,
+  } ToolType;
+};
+
+// Insert EfficiencySanitizer instrumentation.
+FunctionPass *createEfficiencySanitizerPass(
+    const EfficiencySanitizerOptions &Options = EfficiencySanitizerOptions());
+
 // Options for sanitizer coverage instrumentation.
 struct SanitizerCoverageOptions {
   SanitizerCoverageOptions()
       : CoverageType(SCK_None), IndirectCalls(false), TraceBB(false),
-        TraceCmp(false), Use8bitCounters(false) {}
+        TraceCmp(false), Use8bitCounters(false), TracePC(false) {}
 
   enum Type {
     SCK_None = 0,
@@ -132,6 +145,7 @@ struct SanitizerCoverageOptions {
   bool TraceBB;
   bool TraceCmp;
   bool Use8bitCounters;
+  bool TracePC;
 };
 
 // Insert SanitizerCoverage instrumentation.
