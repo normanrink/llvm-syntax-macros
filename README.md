@@ -1,6 +1,6 @@
 ## Low Level Virtual Machine (LLVM)
 
-Since you are readin this, you are on the `syntax-macros` branch.
+Since you are reading this, you are on the `syntax-macros` branch.
 This branch contains the LLVM sources to support the Clang syntax
 macros extension.
 
